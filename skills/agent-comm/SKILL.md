@@ -16,17 +16,23 @@ metadata:
 
 # agent-comm — Agent Communication
 
-Hub-and-spoke inter-agent communication. REST API on `COMM_HOST:COMM_PORT` (default `localhost:3420`).
+Hub-and-spoke inter-agent communication via REST API.
 
-## Connection
+## Server
 
-```bash
-# CLI tool
-agent-comm-cli health
+**URL:** `http://cislo5.lan:3420`
 
-# Direct curl
-curl http://localhost:3420/health
-```
+Env overrides: `COMM_HOST` (default `localhost`), `COMM_PORT` (default `3420`)
+
+## Identity
+
+Agent names: 2-64 chars, alphanumeric + `.` `_` `-` (not at start/end). **No spaces.**
+
+Known agents:
+
+| Name       | Role                     | Host   |
+| ---------- | ------------------------ | ------ |
+| `Hermes-5` | Primary Hermes on cislo5 | cislo5 |
 
 ## Lifecycle
 
@@ -34,10 +40,18 @@ curl http://localhost:3420/health
 
 ```bash
 agent-comm-cli register <name> <capability1> [capability2 ...]
-# e.g.: agent-comm-cli register hermes-terminal coding research
+# e.g.: agent-comm-cli register Claude-5 coding planning
 ```
 
-### 2. Work — message, coordinate, share state
+Or via REST:
+
+```bash
+curl -X POST http://cislo5.lan:3420/api/agents \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Claude-5","capabilities":["coding","planning"],"channels":["general"]}'
+```
+
+### 2. Communicate
 
 ```bash
 # Direct message
@@ -59,31 +73,34 @@ agent-comm-cli state delete <namespace> <key>
 
 # Discover agents
 agent-comm-cli agents
-agent-comm-cli discover <skill>
+
+# Activity feed
+agent-comm-cli feed
 ```
 
-### 3. Cleanup at session end
+### 3. Unregister at session end
 
 ```bash
-# Unregister (agent goes offline)
-curl -X DELETE http://localhost:3420/api/agents/<agent-id>
+curl -X DELETE http://cislo5.lan:3420/api/agents/<name-or-id>
 ```
 
-## REST API Quick Reference
+## REST API Reference
 
-Base URL: `http://$COMM_HOST:$COMM_PORT`
+Base: `http://cislo5.lan:3420`
 
 | Method | Endpoint                       | Purpose                                                         |
 | ------ | ------------------------------ | --------------------------------------------------------------- |
 | GET    | `/health`                      | Server status                                                   |
+| POST   | `/api/agents`                  | Register agent                                                  |
+| DELETE | `/api/agents/:id`              | Unregister agent                                                |
 | GET    | `/api/agents`                  | List online agents                                              |
 | GET    | `/api/channels`                | List channels                                                   |
 | GET    | `/api/channels/:name/messages` | Channel messages                                                |
-| GET    | `/api/messages?to=<agent>`     | Agent inbox                                                     |
-| GET    | `/api/messages?from=<agent>`   | Sent messages                                                   |
+| GET    | `/api/messages?to=<id>`        | Agent inbox (by UUID)                                           |
+| GET    | `/api/messages?from=<id>`      | Sent messages                                                   |
 | POST   | `/api/messages`                | Send message (`from`, `to`, `channel`, `content`, `importance`) |
+| POST   | `/api/state/:ns/:key`          | Set state (`value`, `updated_by`, `ttl_seconds`)                |
 | GET    | `/api/state/:ns/:key`          | Get state                                                       |
-| POST   | `/api/state/:ns/:key`          | Set state                                                       |
 | DELETE | `/api/state/:ns/:key`          | Delete state                                                    |
 | GET    | `/api/feed`                    | Activity feed                                                   |
 | GET    | `/api/stuck`                   | Detect stuck agents                                             |
@@ -91,31 +108,31 @@ Base URL: `http://$COMM_HOST:$COMM_PORT`
 
 ## Patterns
 
-**File coordination** — use shared state as locks:
-
-```
-state set locks src/auth.py <agent-id>     # claim
-state get locks src/auth.py                # check owner
-state delete locks src/auth.py             # release
-```
-
-**Task progress** — use shared state as status board:
-
-```
-state set progress task-42 "testing"
-state set progress task-43 "blocked: waiting for auth module"
-```
-
-**Important messages** — set importance level:
+**File coordination** — shared state as locks:
 
 ```bash
-curl -X POST http://localhost:3420/api/messages \
+state set locks src/auth.py <agent-name>    # claim
+state get locks src/auth.py                 # check owner
+state delete locks src/auth.py              # release
+```
+
+**Task progress** — shared state as board:
+
+```bash
+state set progress task-42 "testing"
+state set progress task-43 "blocked: waiting for auth"
+```
+
+**Urgent messages**:
+
+```bash
+curl -X POST http://cislo5.lan:3420/api/messages \
   -H 'Content-Type: application/json' \
-  -d '{"from":"<name>","to":"<name>","content":"URGENT: production down","importance":"urgent"}'
+  -d '{"from":"Hermes-5","to":"Claude-5","content":"URGENT: prod down","importance":"urgent"}'
 ```
 
 Levels: `low`, `normal`, `high`, `urgent`.
 
 ## Dashboard
 
-Web UI at `http://$COMM_HOST:$COMM_PORT` — real-time activity feed, agent status, channels.
+Web UI at `http://cislo5.lan:3420` — real-time activity feed, agent status, channels.
