@@ -73,7 +73,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
   });
 
   route('GET', '/api/agents', (_req, res) => {
-    json(res, ctx.agents.list());
+    json(res, ctx.agents.list({ includeOffline: true }));
   });
 
   route('POST', '/api/agents', async (req, res) => {

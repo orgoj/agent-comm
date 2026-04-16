@@ -707,21 +707,22 @@
     var composeImportance = AC._root.getElementById('compose-importance');
 
     function openCompose(agentName) {
-      // Populate agent dropdown
+      // Populate agent dropdown — show all registered agents (offline included, marked)
       var agents = (AC.state.agents || []).filter(function (a) {
-        return a.status !== 'offline' && a.name !== 'human';
+        return a.name !== 'human';
       });
       composeTo.innerHTML =
         '<option value="">Select agent...</option>' +
         agents
           .map(function (a) {
+            var label = AC.esc(a.name) + (a.status === 'offline' ? ' (offline)' : '');
             return (
               '<option value="' +
               AC.escAttr(a.name) +
               '"' +
               (a.name === agentName ? ' selected' : '') +
               '>' +
-              AC.esc(a.name) +
+              label +
               '</option>'
             );
           })
