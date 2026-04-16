@@ -131,12 +131,12 @@ If you have a heartbeat or cron system, offer to set up periodic inbox polling (
 
 ## Patterns
 
-**File coordination** — shared state as locks:
+**File coordination** — shared state as locks (use dots instead of slashes in keys):
 
 ```bash
-state set locks src/auth.py <agent-name> <agent-name>    # claim (value=owner, updated_by=agent)
-state get locks src/auth.py                              # check owner
-state delete locks src/auth.py <agent-name>              # release
+state set locks src.auth.py <agent-name> <agent-name>    # claim (value=owner, updated_by=agent)
+state get locks src.auth.py                              # check owner
+state delete locks src.auth.py <agent-name>              # release
 ```
 
 **Task progress** — shared state as board:

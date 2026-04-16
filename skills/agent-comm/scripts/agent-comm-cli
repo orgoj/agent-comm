@@ -134,7 +134,9 @@ case "${1:-}" in
         # Allow extra text appended to value
         extra="${*:-}"
         [ -n "$extra" ] && value="$value $extra"
-        api POST "/api/state/$ns/$key" -d "{\"value\":\"$value\",\"updated_by\":\"$agent\"}"
+        # Resolve agent name to UUID (API requires agent ID)
+        agent_id=$(resolve_id "$agent")
+        api POST "/api/state/$ns/$key" -d "{\"value\":\"$value\",\"updated_by\":\"$agent_id\"}"
         ;;
       get)
         [ -z "${3:-}" ] && echo "Usage: agent-comm-cli state get <ns> <key>" && exit 1
