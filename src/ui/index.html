@@ -215,6 +215,14 @@
                 >
                   <span class="material-symbols-outlined">delete_sweep</span>
                 </button>
+                <button
+                  id="msg-compose"
+                  class="icon-btn"
+                  title="Send message to an agent"
+                  aria-label="Compose message"
+                >
+                  <span class="material-symbols-outlined">edit</span>
+                </button>
               </div>
               <div id="msg-filters" class="filter-chips"></div>
               <div id="messages-list" class="message-list-compact"></div>
@@ -321,6 +329,91 @@
       </div>
     </div>
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
+    <div id="compose-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal" style="max-width: 480px">
+        <h3><span class="material-symbols-outlined panel-icon">edit</span>Send Message</h3>
+        <div class="compose-form">
+          <label for="compose-to" style="display: block; margin-bottom: 4px; font-weight: 500"
+            >To (agent)</label
+          >
+          <select
+            id="compose-to"
+            style="
+              width: 100%;
+              padding: 8px 12px;
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              background: var(--bg-surface);
+              color: var(--text);
+              font-size: 14px;
+            "
+            required
+          >
+            <option value="">Select agent...</option>
+          </select>
+          <label for="compose-content" style="display: block; margin: 12px 0 4px; font-weight: 500"
+            >Message</label
+          >
+          <textarea
+            id="compose-content"
+            rows="4"
+            placeholder="Type your message..."
+            style="
+              width: 100%;
+              padding: 8px 12px;
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              background: var(--bg-surface);
+              color: var(--text);
+              font-size: 14px;
+              resize: vertical;
+              font-family: inherit;
+            "
+            required
+          ></textarea>
+          <label
+            for="compose-importance"
+            style="display: block; margin: 12px 0 4px; font-weight: 500"
+            >Priority</label
+          >
+          <select
+            id="compose-importance"
+            style="
+              width: 100%;
+              padding: 8px 12px;
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              background: var(--bg-surface);
+              color: var(--text);
+              font-size: 14px;
+            "
+          >
+            <option value="normal">Normal</option>
+            <option value="low">Low</option>
+            <option value="high">High</option>
+            <option value="urgent">Urgent</option>
+          </select>
+        </div>
+        <div class="modal-footer" style="margin-top: 16px">
+          <button id="compose-cancel" class="modal-cancel">Cancel</button>
+          <button
+            id="compose-send"
+            style="
+              background: var(--accent);
+              color: #fff;
+              border: none;
+              padding: 8px 24px;
+              border-radius: 8px;
+              font-size: 14px;
+              font-weight: 500;
+              cursor: pointer;
+            "
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
     <script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <script src="morphdom.min.js"></script>

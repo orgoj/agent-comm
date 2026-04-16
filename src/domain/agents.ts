@@ -55,9 +55,12 @@ export class AgentService {
     this.startReaper();
   }
 
-  register(input: AgentCreateInput): Agent {
+  register(input: AgentCreateInput, opts?: { allowReserved?: boolean }): Agent {
     const name = input.name.trim();
     if (!name) throw new ValidationError('Agent name must not be empty.');
+    if (!opts?.allowReserved && name.toLowerCase() === 'human') {
+      throw new ValidationError('The name "human" is reserved for dashboard messages.');
+    }
     if (!NAME_PATTERN.test(name)) {
       throw new ValidationError(
         `Invalid agent name "${name}". Must be 2-64 chars, alphanumeric with . _ - allowed (not at start/end).`,

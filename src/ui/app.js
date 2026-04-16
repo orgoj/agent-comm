@@ -700,6 +700,79 @@
       AC.renderMessageDetail(msgId, threadRoots);
     });
 
+    // Compose modal
+    var composeModal = AC._root.getElementById('compose-modal');
+    var composeTo = AC._root.getElementById('compose-to');
+    var composeContent = AC._root.getElementById('compose-content');
+    var composeImportance = AC._root.getElementById('compose-importance');
+
+    function openCompose() {
+      // Populate agent dropdown
+      var agents = (AC.state.agents || []).filter(function (a) {
+        return a.status !== 'offline' && a.name !== 'human';
+      });
+      composeTo.innerHTML =
+        '<option value="">Select agent...</option>' +
+        agents
+          .map(function (a) {
+            return '<option value="' + AC.escAttr(a.name) + '">' + AC.esc(a.name) + '</option>';
+          })
+          .join('');
+      composeContent.value = '';
+      composeImportance.value = 'normal';
+      composeModal.classList.remove('hidden');
+      composeTo.focus();
+    }
+
+    function closeCompose() {
+      composeModal.classList.add('hidden');
+    }
+
+    function sendCompose() {
+      var to = composeTo.value;
+      var content = composeContent.value.trim();
+      var importance = composeImportance.value;
+      if (!to) {
+        showToast('Error', 'Select an agent');
+        return;
+      }
+      if (!content) {
+        showToast('Error', 'Enter a message');
+        return;
+      }
+      AC._fetch('/api/messages/human', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: to, content: content, importance: importance }),
+      })
+        .then(function (r) {
+          if (!r.ok)
+            return r.json().then(function (d) {
+              throw new Error(d.error || 'Failed');
+            });
+          return r.json();
+        })
+        .then(function () {
+          closeCompose();
+          showToast('Sent', 'Message delivered to ' + to);
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'refresh' }));
+        })
+        .catch(function (err) {
+          showToast('Error', err.message || 'Failed to send');
+        });
+    }
+
+    var composeBtn = AC._root.getElementById('msg-compose');
+    if (composeBtn) composeBtn.addEventListener('click', openCompose);
+    AC._root.getElementById('compose-cancel').addEventListener('click', closeCompose);
+    AC._root.getElementById('compose-send').addEventListener('click', sendCompose);
+    composeModal.addEventListener('click', function (e) {
+      if (e.target === composeModal) closeCompose();
+    });
+    composeContent.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendCompose();
+    });
+
     // Event delegation for morphdom-managed containers
     AC._root.getElementById('agents-list').addEventListener('click', function (e) {
       var card = e.target.closest('.agent-card[data-agent-id]');

@@ -451,6 +451,36 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     processSendMessage(res, body, sender);
   });
 
+  // Human compose — auto-registers a "human" proxy agent for dashboard messages
+  const HUMAN_AGENT_NAME = 'human';
+  route('POST', '/api/messages/human', async (req, res) => {
+    const body = await readBody(req);
+    const to = body.to as string | undefined;
+    const content = body.content as string | undefined;
+
+    if (!to || typeof to !== 'string')
+      return json(res, { error: '"to" (agent name or ID) is required' }, 400);
+    if (!content || typeof content !== 'string')
+      return json(res, { error: '"content" is required' }, 400);
+
+    // Ensure "human" proxy agent exists
+    let sender = ctx.agents.resolveByNameOrId(HUMAN_AGENT_NAME);
+    if (!sender) {
+      sender = ctx.agents.register(
+        { name: HUMAN_AGENT_NAME, capabilities: [] },
+        { allowReserved: true },
+      );
+      ctx.feed.logInternal(
+        sender.id,
+        'register',
+        HUMAN_AGENT_NAME,
+        'auto-registered via dashboard',
+      );
+    }
+
+    processSendMessage(res, { ...body, from: HUMAN_AGENT_NAME }, sender);
+  });
+
   route('POST', '/api/messages', async (req, res) => {
     const body = await readBody(req);
     const from = body.from as string | undefined;
