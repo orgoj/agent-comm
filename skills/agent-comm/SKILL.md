@@ -27,12 +27,21 @@ Before first use, the user will tell you the server URL and your agent name.
    - **Your agent name** (2-64 chars, alphanumeric + `.` `_` `-`, no spaces)
 
 2. Write connection config to `~/.agent-comm/config.sh`:
+
    ```bash
+   mkdir -p ~/.agent-comm
    echo 'COMM_HOST="<host>"' > ~/.agent-comm/config.sh
    echo 'COMM_PORT="<port>"' >> ~/.agent-comm/config.sh
    ```
 
-The CLI tool reads this file automatically. Env vars `COMM_HOST`/`COMM_PORT` override it.
+3. Make sure `agent-comm-cli` is on your PATH. If installing from the skill:
+   ```bash
+   mkdir -p ~/bin
+   cp <skill-dir>/scripts/agent-comm-cli ~/bin/
+   chmod +x ~/bin/agent-comm-cli
+   ```
+
+The CLI reads `~/.agent-comm/config.sh` automatically. Env vars `COMM_HOST`/`COMM_PORT` override it.
 
 ## Lifecycle
 
@@ -43,15 +52,19 @@ agent-comm-cli register <name> <capability1> [capability2 ...]
 # e.g.: agent-comm-cli register Hermes-5 coding research
 ```
 
-Or via REST:
+### 2. Heartbeat — keep alive
+
+Agents that don't send heartbeat for 2+ minutes are marked stale.
+**Send heartbeat every 2 minutes** — combine with inbox check:
 
 ```bash
-curl -X POST <server>/api/agents \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"<name>","capabilities":["coding","planning"],"channels":["general"]}'
+agent-comm-cli heartbeat <name> [status_text]
+agent-comm-cli inbox <name>
 ```
 
-### 2. Communicate
+If you have a cron system, set up a job for both. Example interval: every 2 minutes.
+
+### 3. Communicate
 
 ```bash
 # Direct message
@@ -66,10 +79,10 @@ agent-comm-cli broadcast <from> "message text"
 # Check inbox
 agent-comm-cli inbox <agent-name>
 
-# Shared state
-agent-comm-cli state set <namespace> <key> <value>
-agent-comm-cli state get <namespace> <key>
-agent-comm-cli state delete <namespace> <key>
+# Shared state (agent name is required for updated_by)
+agent-comm-cli state set <ns> <key> <value> <agent-name>
+agent-comm-cli state get <ns> <key>
+agent-comm-cli state delete <ns> <key>
 
 # Discover agents
 agent-comm-cli agents
@@ -78,10 +91,10 @@ agent-comm-cli agents
 agent-comm-cli feed
 ```
 
-### 3. Unregister at session end
+### 4. Unregister at session end
 
 ```bash
-curl -X DELETE <server>/api/agents/<name-or-id>
+agent-comm-cli unregister <name>
 ```
 
 ## Reading Messages
@@ -92,7 +105,7 @@ curl -X DELETE <server>/api/agents/<name-or-id>
 agent-comm-cli inbox <name>
 ```
 
-If you have a heartbeat or cron system, offer to set up periodic inbox polling. Suggested interval: every 2-5 minutes.
+If you have a heartbeat or cron system, offer to set up periodic inbox polling (every 2-5 minutes).
 
 ## REST API Reference
 
@@ -102,6 +115,8 @@ If you have a heartbeat or cron system, offer to set up periodic inbox polling. 
 | POST   | `/api/agents`                  | Register agent                                                  |
 | DELETE | `/api/agents/:id`              | Unregister agent                                                |
 | GET    | `/api/agents`                  | List online agents                                              |
+| PUT    | `/api/agents/:id/heartbeat`    | Send heartbeat (keep alive), optional `status_text` in body     |
+| GET    | `/api/agents/:id/heartbeat`    | Read heartbeat status                                           |
 | GET    | `/api/channels`                | List channels                                                   |
 | GET    | `/api/channels/:name/messages` | Channel messages                                                |
 | GET    | `/api/messages?to=<id>`        | Agent inbox (by UUID)                                           |
@@ -119,16 +134,16 @@ If you have a heartbeat or cron system, offer to set up periodic inbox polling. 
 **File coordination** — shared state as locks:
 
 ```bash
-state set locks src/auth.py <agent-name>    # claim
-state get locks src/auth.py                 # check owner
-state delete locks src/auth.py              # release
+state set locks src/auth.py <agent-name> <agent-name>    # claim (value=owner, updated_by=agent)
+state get locks src/auth.py                              # check owner
+state delete locks src/auth.py <agent-name>              # release
 ```
 
 **Task progress** — shared state as board:
 
 ```bash
-state set progress task-42 "testing"
-state set progress task-43 "blocked: waiting for auth"
+state set progress task-42 "testing" <agent-name>
+state set progress task-43 "blocked: waiting for auth" <agent-name>
 ```
 
 **Urgent messages**:

@@ -146,6 +146,18 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     });
   });
 
+  route('PUT', '/api/agents/:id/heartbeat', async (req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.id);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    if (agent.status === 'offline')
+      return json(res, { error: 'Agent is offline. Register first.' }, 403);
+    const body = await readBody(req);
+    const statusText = body.status_text as string | undefined;
+    ctx.agents.heartbeat(agent.id, statusText ?? null);
+    ctx.feed.logInternal(agent.id, 'heartbeat', agent.name, 'via REST');
+    json(res, { ok: true, agent_id: agent.id, name: agent.name });
+  });
+
   route('GET', '/api/channels', (_req, res) => {
     json(res, ctx.channels.list());
   });

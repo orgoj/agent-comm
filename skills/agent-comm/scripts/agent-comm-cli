@@ -19,6 +19,8 @@ Usage: agent-comm-cli <command> [args]
 Commands:
   health                           Server health check
   register <name> [capabilities]   Register agent
+  unregister <name>                Unregister agent (go offline)
+  heartbeat <name> [status_text]   Send heartbeat (keep alive)
   agents                           List online agents
   discover [skill]                 Find agents by skill
   send <from> <to> <message>       Send direct message
@@ -66,6 +68,22 @@ case "${1:-}" in
     caps=$(printf '%s\n' "$@" | jq -R . | jq -s .)
     api POST /api/agents -d "{\"name\":\"$name\",\"capabilities\":$caps}"
     ;;
+  unregister)
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli unregister <name>" && exit 1
+    agent_id=$(resolve_id "$2")
+    api DELETE "/api/agents/$agent_id"
+    ;;
+  heartbeat)
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli heartbeat <name> [status_text]" && exit 1
+    agent_id=$(resolve_id "$2")
+    shift 2
+    status_text="${*:-}"
+    if [ -n "$status_text" ]; then
+      api PUT "/api/agents/$agent_id/heartbeat" -d "{\"status_text\":\"$status_text\"}"
+    else
+      api PUT "/api/agents/$agent_id/heartbeat" -d '{}'
+    fi
+    ;;
   agents)
     get /api/agents
     ;;
@@ -111,9 +129,12 @@ case "${1:-}" in
     action="$2"
     case "$action" in
       set)
-        [ -z "${4:-}" ] && echo "Usage: agent-comm-cli state set <ns> <key> <value>" && exit 1
-        ns="$3"; key="$4"; shift 4; value="$*"
-        api POST "/api/state/$ns/$key" -d "{\"value\":\"$value\"}"
+        [ -z "${5:-}" ] && echo "Usage: agent-comm-cli state set <ns> <key> <value> <agent>" && exit 1
+        ns="$3"; key="$4"; value="$5"; agent="$6"; shift 6
+        # Allow extra text appended to value
+        extra="${*:-}"
+        [ -n "$extra" ] && value="$value $extra"
+        api POST "/api/state/$ns/$key" -d "{\"value\":\"$value\",\"updated_by\":\"$agent\"}"
         ;;
       get)
         [ -z "${3:-}" ] && echo "Usage: agent-comm-cli state get <ns> <key>" && exit 1
