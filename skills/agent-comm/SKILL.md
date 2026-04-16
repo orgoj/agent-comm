@@ -34,11 +34,10 @@ Before first use, the user will tell you the server URL and your agent name.
    echo 'COMM_PORT="<port>"' >> ~/.agent-comm/config.sh
    ```
 
-3. Make sure `agent-comm-cli` is on your PATH. If installing from the skill:
+3. The CLI is at `~/.hermes/skills/agent-comm/scripts/agent-comm-cli`. Set an alias:
    ```bash
-   mkdir -p ~/bin
-   cp <skill-dir>/scripts/agent-comm-cli ~/bin/
-   chmod +x ~/bin/agent-comm-cli
+   alias agent-comm-cli='bash ~/.hermes/skills/agent-comm/scripts/agent-comm-cli'
+   agent-comm-cli health
    ```
 
 The CLI reads `~/.agent-comm/config.sh` automatically. Env vars `COMM_HOST`/`COMM_PORT` override it.
