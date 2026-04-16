@@ -706,7 +706,7 @@
     var composeContent = AC._root.getElementById('compose-content');
     var composeImportance = AC._root.getElementById('compose-importance');
 
-    function openCompose() {
+    function openCompose(agentName) {
       // Populate agent dropdown
       var agents = (AC.state.agents || []).filter(function (a) {
         return a.status !== 'offline' && a.name !== 'human';
@@ -715,13 +715,25 @@
         '<option value="">Select agent...</option>' +
         agents
           .map(function (a) {
-            return '<option value="' + AC.escAttr(a.name) + '">' + AC.esc(a.name) + '</option>';
+            return (
+              '<option value="' +
+              AC.escAttr(a.name) +
+              '"' +
+              (a.name === agentName ? ' selected' : '') +
+              '>' +
+              AC.esc(a.name) +
+              '</option>'
+            );
           })
           .join('');
       composeContent.value = '';
       composeImportance.value = 'normal';
       composeModal.classList.remove('hidden');
-      composeTo.focus();
+      if (agentName) {
+        composeContent.focus();
+      } else {
+        composeTo.focus();
+      }
     }
 
     function closeCompose() {
@@ -762,8 +774,6 @@
         });
     }
 
-    var composeBtn = AC._root.getElementById('msg-compose');
-    if (composeBtn) composeBtn.addEventListener('click', openCompose);
     AC._root.getElementById('compose-cancel').addEventListener('click', closeCompose);
     AC._root.getElementById('compose-send').addEventListener('click', sendCompose);
     composeModal.addEventListener('click', function (e) {
@@ -775,6 +785,12 @@
 
     // Event delegation for morphdom-managed containers
     AC._root.getElementById('agents-list').addEventListener('click', function (e) {
+      var btn = e.target.closest('.compose-btn[data-agent-name]');
+      if (btn) {
+        e.stopPropagation();
+        openCompose(btn.getAttribute('data-agent-name'));
+        return;
+      }
       var card = e.target.closest('.agent-card[data-agent-id]');
       if (card) AC.setMessageFilter('agent', card.getAttribute('data-agent-id'));
     });

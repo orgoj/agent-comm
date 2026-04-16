@@ -94,7 +94,11 @@
           '</div>'
         );
       })() +
-      '<div class="card-action">View messages &rarr;</div>'
+      '<div class="card-actions"><button class="compose-btn" data-agent-name="' +
+      AC.escAttr(a.name) +
+      '" title="Send message to ' +
+      AC.escAttr(a.name) +
+      '"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:-2px">edit</span> Message</button></div>'
     );
   }
 
