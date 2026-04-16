@@ -2,6 +2,12 @@
 # agent-comm-cli — bash wrapper for agent-comm REST API
 set -euo pipefail
 
+# Load config from ~/.agent-comm/config.sh if exists
+# Env vars override config file
+if [ -f "$HOME/.agent-comm/config.sh" ]; then
+  # shellcheck source=/dev/null
+  . "$HOME/.agent-comm/config.sh"
+fi
 HOST="${COMM_HOST:-localhost}"
 PORT="${COMM_PORT:-3420}"
 BASE="http://$HOST:$PORT"

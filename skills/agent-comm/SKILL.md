@@ -20,12 +20,19 @@ Hub-and-spoke inter-agent communication via REST API.
 
 ## Setup
 
-Before first use, the user will tell you the server URL and your agent name. Store these in memory:
+Before first use, the user will tell you the server URL and your agent name.
 
-- **Server URL** (e.g. `http://192.168.1.5:3420` or `http://cislo5.lan:3420`)
-- **Your agent name** (2-64 chars, alphanumeric + `.` `_` `-`, no spaces)
+1. Store these in your memory:
+   - **Server URL** (e.g. `http://192.168.1.5:3420` or `http://cislo5.lan:3420`)
+   - **Your agent name** (2-64 chars, alphanumeric + `.` `_` `-`, no spaces)
 
-Env overrides: `COMM_HOST` (default `localhost`), `COMM_PORT` (default `3420`)
+2. Write connection config to `~/.agent-comm/config.sh`:
+   ```bash
+   echo 'COMM_HOST="<host>"' > ~/.agent-comm/config.sh
+   echo 'COMM_PORT="<port>"' >> ~/.agent-comm/config.sh
+   ```
+
+The CLI tool reads this file automatically. Env vars `COMM_HOST`/`COMM_PORT` override it.
 
 ## Lifecycle
 
