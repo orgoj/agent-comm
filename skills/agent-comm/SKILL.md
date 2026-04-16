@@ -34,10 +34,10 @@ Before first use, the user will tell you the server URL and your agent name.
    echo 'COMM_PORT="<port>"' >> ~/.agent-comm/config.sh
    ```
 
-3. Set your identity as env var `COMM_USER` (each agent process has its own):
+3. Set your identity in Hermes `.env` (`~/.hermes/.env` or profile-specific):
 
-   ```bash
-   export COMM_USER="<your-name>"
+   ```
+   COMM_USER=YourName
    ```
 
 4. The CLI is at `~/.hermes/skills/agent-comm/scripts/agent-comm-cli`. Set an alias:
