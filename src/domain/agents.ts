@@ -15,6 +15,9 @@ const STALE_THRESHOLD_SECONDS = 90;
 const OFFLINE_THRESHOLD_SECONDS = 300;
 const REAP_INTERVAL_MS = 30_000;
 
+const OFFLINE_TIMEOUT_ENV = parseInt(process.env.OFFLINE_TIMEOUT || '0', 10);
+const REAPER_DISABLED = OFFLINE_TIMEOUT_ENV === 0;
+
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}[a-zA-Z0-9]$/;
 
 interface AgentRow {
@@ -298,17 +301,33 @@ export class AgentService {
     this.events.emit('agent:offline', { agentId });
   }
 
+  /** Re-activate an offline agent back to online (for REST agents without regular heartbeats). */
+  reactivate(agentId: string): void {
+    this.db.run(
+      `UPDATE agents SET status = 'online', last_heartbeat = datetime('now'),
+       last_activity = datetime('now') WHERE id = ?`,
+      [agentId],
+    );
+    const agent = this.getById(agentId);
+    if (agent) this.events.emit('agent:registered', { agent });
+  }
+
   reapStale(): void {
+    if (REAPER_DISABLED) return;
+    // Never reap the "human" proxy agent (dashboard user)
+    const excludeHuman = `AND name != 'human'`;
     this.db.run(
       `UPDATE agents SET status = 'idle'
        WHERE status = 'online'
-         AND last_heartbeat < datetime('now', ? || ' seconds')`,
+         AND last_heartbeat < datetime('now', ? || ' seconds')
+         ${excludeHuman}`,
       [`-${STALE_THRESHOLD_SECONDS}`],
     );
     this.db.run(
       `UPDATE agents SET status = 'offline'
        WHERE status IN ('online', 'idle')
-         AND last_heartbeat < datetime('now', ? || ' seconds')`,
+         AND last_heartbeat < datetime('now', ? || ' seconds')
+         ${excludeHuman}`,
       [`-${OFFLINE_THRESHOLD_SECONDS}`],
     );
     // Stuck detection: agents with recent heartbeat but no activity for 10+ minutes
@@ -317,7 +336,8 @@ export class AgentService {
        WHERE status = 'online'
          AND last_heartbeat >= datetime('now', ? || ' seconds')
          AND last_activity IS NOT NULL
-         AND last_activity < datetime('now', '-600 seconds')`,
+         AND last_activity < datetime('now', '-600 seconds')
+         ${excludeHuman}`,
       [`-${OFFLINE_THRESHOLD_SECONDS}`],
     );
   }

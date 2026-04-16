@@ -149,8 +149,10 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
   route('PUT', '/api/agents/:id/heartbeat', async (req, res, params) => {
     const agent = ctx.agents.resolveByNameOrId(params.id);
     if (!agent) return json(res, { error: 'Not found' }, 404);
-    if (agent.status === 'offline')
-      return json(res, { error: 'Agent is offline. Register first.' }, 403);
+    // Re-activate offline agents (REST agents may not send heartbeats regularly)
+    if (agent.status === 'offline') {
+      ctx.agents.reactivate(agent.id);
+    }
     const body = await readBody(req);
     const statusText = body.status_text as string | undefined;
     ctx.agents.heartbeat(agent.id, statusText ?? null);

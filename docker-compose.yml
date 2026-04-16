@@ -9,3 +9,4 @@ services:
       - ~/.agent-comm:/data
     environment:
       - AGENT_COMM_RETENTION_DAYS=30
+      - OFFLINE_TIMEOUT=0
