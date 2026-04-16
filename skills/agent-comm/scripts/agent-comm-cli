@@ -23,12 +23,12 @@ Commands:
   heartbeat <name> [status_text]   Send heartbeat (keep alive)
   agents                           List agents
   discover [skill]                 Find agents by skill
-  send <from> <to> <message>       Send direct message
-  broadcast <from> <message>       Broadcast to all
+  send <to> <message>               Send direct message (COMM_USER env required)
+  broadcast <message>               Broadcast to all (COMM_USER env required)
   inbox <agent>                    Check inbox (unread messages)
   channels                         List channels
   channel <name>                   Channel details + messages
-  state set <ns> <key> <value> <agent>   Set shared state
+  state set <ns> <key> <value>     Set shared state (COMM_USER env required)
   state get <ns> <key>             Get shared state
   state delete <ns> <key>          Delete shared state
   feed [agent]                     Activity feed
@@ -36,8 +36,9 @@ Commands:
   overview                         Full snapshot
 
 Environment:
-  COMM_HOST  Server host (default: localhost)
-  COMM_PORT  Server port (default: 3420)
+  COMM_HOST   Server host (default: localhost)
+  COMM_PORT   Server port (default: 3420)
+  COMM_USER   Agent identity — required for send/broadcast/state set
 EOF
   exit 1
 }
@@ -96,21 +97,23 @@ case "${1:-}" in
     fi
     ;;
   send)
-    [ -z "${3:-}" ] && echo "Usage: agent-comm-cli send <from> <to> <message>" && exit 1
-    from="$2"; to="$3"; shift 3
+    [ -z "${COMM_USER:-}" ] && echo "Error: COMM_USER env var not set. Each agent must have its own identity." >&2 && exit 1
+    [ -z "${3:-}" ] && echo "Usage: agent-comm-cli send <to> <message>" && exit 1
+    to="$2"; shift 2
     msg="$*"
     if [[ "$to" == channel:* ]]; then
       ch="${to#channel:}"
-      api POST /api/messages -d "{\"from\":\"$from\",\"channel\":\"$ch\",\"content\":\"$msg\"}"
+      api POST /api/messages -d "{\"from\":\"$COMM_USER\",\"channel\":\"$ch\",\"content\":\"$msg\"}"
     else
-      api POST /api/messages -d "{\"from\":\"$from\",\"to\":\"$to\",\"content\":\"$msg\"}"
+      api POST /api/messages -d "{\"from\":\"$COMM_USER\",\"to\":\"$to\",\"content\":\"$msg\"}"
     fi
     ;;
   broadcast)
-    [ -z "${3:-}" ] && echo "Usage: agent-comm-cli broadcast <from> <message>" && exit 1
-    from="$2"; shift 2
+    [ -z "${COMM_USER:-}" ] && echo "Error: COMM_USER env var not set. Each agent must have its own identity." >&2 && exit 1
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli broadcast <message>" && exit 1
+    shift 1
     msg="$*"
-    api POST /api/messages -d "{\"from\":\"$from\",\"content\":\"$msg\"}"
+    api POST /api/messages -d "{\"from\":\"$COMM_USER\",\"content\":\"$msg\"}"
     ;;
   inbox)
     [ -z "${2:-}" ] && echo "Usage: agent-comm-cli inbox <agent>" && exit 1
@@ -129,13 +132,14 @@ case "${1:-}" in
     action="$2"
     case "$action" in
       set)
-        [ -z "${5:-}" ] && echo "Usage: agent-comm-cli state set <ns> <key> <value> <agent>" && exit 1
-        ns="$3"; key="$4"; value="$5"; agent="$6"; shift 6
+        [ -z "${COMM_USER:-}" ] && echo "Error: COMM_USER env var not set. Each agent must have its own identity." >&2 && exit 1
+        [ -z "${5:-}" ] && echo "Usage: agent-comm-cli state set <ns> <key> <value>" && exit 1
+        ns="$3"; key="$4"; value="$5"; shift 5
         # Allow extra text appended to value
         extra="${*:-}"
         [ -n "$extra" ] && value="$value $extra"
-        # Resolve agent name to UUID (API requires agent ID)
-        agent_id=$(resolve_id "$agent")
+        # Resolve own agent name to UUID (API requires agent ID)
+        agent_id=$(resolve_id "$COMM_USER")
         api POST "/api/state/$ns/$key" -d "{\"value\":\"$value\",\"updated_by\":\"$agent_id\"}"
         ;;
       get)

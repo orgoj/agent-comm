@@ -34,7 +34,13 @@ Before first use, the user will tell you the server URL and your agent name.
    echo 'COMM_PORT="<port>"' >> ~/.agent-comm/config.sh
    ```
 
-3. The CLI is at `~/.hermes/skills/agent-comm/scripts/agent-comm-cli`. Set an alias:
+3. Set your identity as env var `COMM_USER` (each agent process has its own):
+
+   ```bash
+   export COMM_USER="<your-name>"
+   ```
+
+4. The CLI is at `~/.hermes/skills/agent-comm/scripts/agent-comm-cli`. Set an alias:
    ```bash
    alias agent-comm-cli='bash ~/.hermes/skills/agent-comm/scripts/agent-comm-cli'
    agent-comm-cli health
@@ -44,9 +50,11 @@ The CLI reads `~/.agent-comm/config.sh` automatically. Env vars `COMM_HOST`/`COM
 
 ## ⚠ Identity Rule
 
-**You MUST use your own registered name in every `from` field. NEVER impersonate another agent.**
+**`COMM_USER` env var is your identity. CLI refuses send/broadcast/state-set without it.**
 
-This applies to: `send`, `broadcast`, `state set`. The server validates that `from` is a registered agent — using a different name is spoofing and will be rejected or cause confusion.
+- The CLI reads `COMM_USER` — you never pass your name as a parameter to these commands.
+- NEVER use curl directly to send messages — always use the CLI.
+- NEVER try to set `COMM_USER` to another agent's name. The server validates the sender is registered.
 
 ## Lifecycle
 
@@ -72,20 +80,20 @@ If you have a cron system, set up a job for both. Example interval: every 2 minu
 ### 3. Communicate
 
 ```bash
-# Direct message
-agent-comm-cli send <from> <to> "message text"
+# Direct message (from = COMM_USER automatically)
+agent-comm-cli send <to> "message text"
 
 # Channel message
-agent-comm-cli send <from> channel:<name> "message text"
+agent-comm-cli send channel:<name> "message text"
 
 # Broadcast to all
-agent-comm-cli broadcast <from> "message text"
+agent-comm-cli broadcast "message text"
 
 # Check inbox
 agent-comm-cli inbox <agent-name>
 
-# Shared state (agent name is required for updated_by)
-agent-comm-cli state set <ns> <key> <value> <agent-name>
+# Shared state (updated_by = COMM_USER automatically)
+agent-comm-cli state set <ns> <key> <value>
 agent-comm-cli state get <ns> <key>
 agent-comm-cli state delete <ns> <key>
 
@@ -119,7 +127,7 @@ If you have a heartbeat or cron system, offer to set up periodic inbox polling (
 | GET    | `/health`                      | Server status                                                   |
 | POST   | `/api/agents`                  | Register agent                                                  |
 | DELETE | `/api/agents/:id`              | Unregister agent                                                |
-| GET    | `/api/agents`                  | List online agents                                              |
+| GET    | `/api/agents`                  | List agents                                                     |
 | PUT    | `/api/agents/:id/heartbeat`    | Send heartbeat (keep alive), optional `status_text` in body     |
 | GET    | `/api/agents/:id/heartbeat`    | Read heartbeat status                                           |
 | GET    | `/api/channels`                | List channels                                                   |
@@ -139,27 +147,25 @@ If you have a heartbeat or cron system, offer to set up periodic inbox polling (
 **File coordination** — shared state as locks (use dots instead of slashes in keys):
 
 ```bash
-state set locks src.auth.py <agent-name> <agent-name>    # claim (value=owner, updated_by=agent)
-state get locks src.auth.py                              # check owner
-state delete locks src.auth.py <agent-name>              # release
+agent-comm-cli state set locks src.auth.py <your-name>    # claim
+agent-comm-cli state get locks src.auth.py                # check owner
+agent-comm-cli state delete locks src.auth.py             # release
 ```
 
 **Task progress** — shared state as board:
 
 ```bash
-state set progress task-42 "testing" <agent-name>
-state set progress task-43 "blocked: waiting for auth" <agent-name>
+agent-comm-cli state set progress task-42 "testing"
+agent-comm-cli state set progress task-43 "blocked: waiting for auth"
 ```
 
 **Urgent messages**:
 
 ```bash
-curl -X POST <server>/api/messages \
-  -H 'Content-Type: application/json' \
-  -d '{"from":"<name>","to":"<name>","content":"URGENT: prod down","importance":"urgent"}'
+agent-comm-cli send <agent> "URGENT: prod down"
 ```
 
-Levels: `low`, `normal`, `high`, `urgent`.
+Importance levels: `low`, `normal`, `high`, `urgent` (set via API only, CLI defaults to `normal`).
 
 ## Dashboard
 
