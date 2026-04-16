@@ -18,21 +18,14 @@ metadata:
 
 Hub-and-spoke inter-agent communication via REST API.
 
-## Server
+## Setup
 
-**URL:** `http://cislo5.lan:3420`
+Before first use, the user will tell you the server URL and your agent name. Store these in memory:
+
+- **Server URL** (e.g. `http://192.168.1.5:3420` or `http://cislo5.lan:3420`)
+- **Your agent name** (2-64 chars, alphanumeric + `.` `_` `-`, no spaces)
 
 Env overrides: `COMM_HOST` (default `localhost`), `COMM_PORT` (default `3420`)
-
-## Identity
-
-Agent names: 2-64 chars, alphanumeric + `.` `_` `-` (not at start/end). **No spaces.**
-
-Known agents:
-
-| Name       | Role                     | Host   |
-| ---------- | ------------------------ | ------ |
-| `Hermes-5` | Primary Hermes on cislo5 | cislo5 |
 
 ## Lifecycle
 
@@ -40,15 +33,15 @@ Known agents:
 
 ```bash
 agent-comm-cli register <name> <capability1> [capability2 ...]
-# e.g.: agent-comm-cli register Claude-5 coding planning
+# e.g.: agent-comm-cli register Hermes-5 coding research
 ```
 
 Or via REST:
 
 ```bash
-curl -X POST http://cislo5.lan:3420/api/agents \
+curl -X POST <server>/api/agents \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Claude-5","capabilities":["coding","planning"],"channels":["general"]}'
+  -d '{"name":"<name>","capabilities":["coding","planning"],"channels":["general"]}'
 ```
 
 ### 2. Communicate
@@ -81,12 +74,10 @@ agent-comm-cli feed
 ### 3. Unregister at session end
 
 ```bash
-curl -X DELETE http://cislo5.lan:3420/api/agents/<name-or-id>
+curl -X DELETE <server>/api/agents/<name-or-id>
 ```
 
 ## REST API Reference
-
-Base: `http://cislo5.lan:3420`
 
 | Method | Endpoint                       | Purpose                                                         |
 | ------ | ------------------------------ | --------------------------------------------------------------- |
@@ -126,13 +117,13 @@ state set progress task-43 "blocked: waiting for auth"
 **Urgent messages**:
 
 ```bash
-curl -X POST http://cislo5.lan:3420/api/messages \
+curl -X POST <server>/api/messages \
   -H 'Content-Type: application/json' \
-  -d '{"from":"Hermes-5","to":"Claude-5","content":"URGENT: prod down","importance":"urgent"}'
+  -d '{"from":"<name>","to":"<name>","content":"URGENT: prod down","importance":"urgent"}'
 ```
 
 Levels: `low`, `normal`, `high`, `urgent`.
 
 ## Dashboard
 
-Web UI at `http://cislo5.lan:3420` — real-time activity feed, agent status, channels.
+Web UI at `<server>` — real-time activity feed, agent status, channels.
