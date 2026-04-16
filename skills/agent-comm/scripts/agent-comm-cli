@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+# agent-comm-cli — bash wrapper for agent-comm REST API
+set -euo pipefail
+
+HOST="${COMM_HOST:-localhost}"
+PORT="${COMM_PORT:-3420}"
+BASE="http://$HOST:$PORT"
+
+usage() {
+  cat <<EOF
+Usage: agent-comm-cli <command> [args]
+
+Commands:
+  health                           Server health check
+  register <name> [capabilities]   Register agent
+  agents                           List online agents
+  discover [skill]                 Find agents by skill
+  send <from> <to> <message>       Send direct message
+  broadcast <from> <message>       Broadcast to all
+  inbox <agent>                    Check inbox (unread messages)
+  channels                         List channels
+  channel <name>                   Channel details + messages
+  state set <ns> <key> <value>     Set shared state
+  state get <ns> <key>             Get shared state
+  state delete <ns> <key>          Delete shared state
+  feed [agent]                     Activity feed
+  stuck [threshold_minutes]        Detect stuck agents
+  overview                         Full snapshot
+
+Environment:
+  COMM_HOST  Server host (default: localhost)
+  COMM_PORT  Server port (default: 3420)
+EOF
+  exit 1
+}
+
+api() {
+  local method="$1" path="$2"
+  shift 2
+  curl -s -X "$method" "$BASE$path" -H 'Content-Type: application/json' "$@"
+}
+
+get() {
+  curl -s "$BASE$1"
+}
+
+case "${1:-}" in
+  health)
+    get /health
+    ;;
+  register)
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli register <name> [capabilities...]" && exit 1
+    name="$2"; shift 2
+    caps=$(printf '%s\n' "$@" | jq -R . | jq -s .)
+    api POST /api/agents -d "{\"name\":\"$name\",\"capabilities\":$caps}"
+    ;;
+  agents)
+    get /api/agents
+    ;;
+  discover)
+    skill="${2:-}"
+    if [ -n "$skill" ]; then
+      get "/api/agents?skill=$skill"
+    else
+      get /api/agents
+    fi
+    ;;
+  send)
+    [ -z "${3:-}" ] && echo "Usage: agent-comm-cli send <from> <to> <message>" && exit 1
+    from="$2"; to="$3"; shift 3
+    msg="$*"
+    if [[ "$to" == channel:* ]]; then
+      ch="${to#channel:}"
+      api POST /api/messages -d "{\"from_agent\":\"$from\",\"channel\":\"$ch\",\"content\":\"$msg\"}"
+    else
+      api POST /api/messages -d "{\"from_agent\":\"$from\",\"to_agent\":\"$to\",\"content\":\"$msg\"}"
+    fi
+    ;;
+  broadcast)
+    [ -z "${3:-}" ] && echo "Usage: agent-comm-cli broadcast <from> <message>" && exit 1
+    from="$2"; shift 2
+    msg="$*"
+    api POST /api/messages -d "{\"from_agent\":\"$from\",\"content\":\"$msg\"}"
+    ;;
+  inbox)
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli inbox <agent>" && exit 1
+    get "/api/messages?to=$2&limit=20"
+    ;;
+  channels)
+    get /api/channels
+    ;;
+  channel)
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli channel <name>" && exit 1
+    get "/api/channels/$2"
+    ;;
+  state)
+    [ -z "${2:-}" ] && echo "Usage: agent-comm-cli state <set|get|delete> ..." && exit 1
+    action="$2"
+    case "$action" in
+      set)
+        [ -z "${4:-}" ] && echo "Usage: agent-comm-cli state set <ns> <key> <value>" && exit 1
+        ns="$3"; key="$4"; shift 4; value="$*"
+        api POST "/api/state/$ns/$key" -d "{\"value\":\"$value\"}"
+        ;;
+      get)
+        [ -z "${3:-}" ] && echo "Usage: agent-comm-cli state get <ns> <key>" && exit 1
+        get "/api/state/$3/${4:-}"
+        ;;
+      delete)
+        [ -z "${4:-}" ] && echo "Usage: agent-comm-cli state delete <ns> <key>" && exit 1
+        api DELETE "/api/state/$3/$4"
+        ;;
+      *)
+        echo "Unknown state action: $action"; exit 1
+        ;;
+    esac
+    ;;
+  feed)
+    agent="${2:-}"
+    if [ -n "$agent" ]; then
+      get "/api/feed?agent=$agent&limit=20"
+    else
+      get "/api/feed?limit=20"
+    fi
+    ;;
+  stuck)
+    threshold="${2:-10}"
+    get "/api/stuck?threshold_minutes=$threshold"
+    ;;
+  overview)
+    get /api/overview
+    ;;
+  *)
+    usage
+    ;;
+esac
