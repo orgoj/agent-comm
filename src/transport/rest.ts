@@ -465,7 +465,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     if (!content || typeof content !== 'string')
       return json(res, { error: '"content" is required' }, 400);
 
-    // Ensure "human" proxy agent exists
+    // Ensure "human" proxy agent exists and is online
     let sender = ctx.agents.resolveByNameOrId(HUMAN_AGENT_NAME);
     if (!sender) {
       sender = ctx.agents.register(
@@ -478,6 +478,8 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
         HUMAN_AGENT_NAME,
         'auto-registered via dashboard',
       );
+    } else if (sender.status === 'offline') {
+      ctx.agents.reactivate(sender.id);
     }
 
     processSendMessage(res, { ...body, from: HUMAN_AGENT_NAME }, sender);

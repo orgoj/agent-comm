@@ -56,6 +56,7 @@ export class AgentService {
     private readonly events: EventBus,
   ) {
     this.startReaper();
+    if (REAPER_DISABLED) this.reactivateAll();
   }
 
   register(input: AgentCreateInput, opts?: { allowReserved?: boolean }): Agent {
@@ -310,6 +311,20 @@ export class AgentService {
     );
     const agent = this.getById(agentId);
     if (agent) this.events.emit('agent:registered', { agent });
+  }
+
+  /** Re-activate all offline agents on startup when reaper is disabled. */
+  reactivateAll(): void {
+    const rows = this.db.queryAll<AgentRow>(`SELECT * FROM agents WHERE status = 'offline'`);
+    if (rows.length === 0) return;
+    this.db.run(`UPDATE agents SET status = 'online', last_heartbeat = datetime('now'),
+     last_activity = datetime('now') WHERE status = 'offline'`);
+    for (const row of rows) {
+      this.events.emit('agent:registered', { agent: rowToAgent(row) });
+    }
+    process.stderr.write(
+      `[agent-comm] Reactivated ${rows.length} offline agent(s) (reaper disabled)\n`,
+    );
   }
 
   reapStale(): void {
