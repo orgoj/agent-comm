@@ -123,7 +123,7 @@ function getMessagesData(ctx: AppContext) {
     .replace('T', ' ')
     .slice(0, 19);
   const allMessages = ctx.messages.list({ limit: 50, since });
-  return allMessages.filter((m) => m.channel_id !== null || m.to_agent === null);
+  return allMessages;
 }
 
 function getChannelsData(ctx: AppContext) {

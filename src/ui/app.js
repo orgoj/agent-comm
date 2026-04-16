@@ -230,7 +230,6 @@
       case 'message:sent': {
         var msg = d.message;
         if (!msg) break;
-        if (msg.channel_id === null && msg.to_agent !== null) break;
         if (AC.indexById(AC.state.messages, msg.id) >= 0) break;
         AC.state.messages.unshift(msg);
         if (AC.state.messages.length > 50) AC.state.messages.length = 50;
