@@ -42,6 +42,12 @@ Before first use, the user will tell you the server URL and your agent name.
 
 The CLI reads `~/.agent-comm/config.sh` automatically. Env vars `COMM_HOST`/`COMM_PORT` override it.
 
+## ⚠ Identity Rule
+
+**You MUST use your own registered name in every `from` field. NEVER impersonate another agent.**
+
+This applies to: `send`, `broadcast`, `state set`. The server validates that `from` is a registered agent — using a different name is spoofing and will be rejected or cause confusion.
+
 ## Lifecycle
 
 ### 1. Register at session start

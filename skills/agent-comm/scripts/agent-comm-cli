@@ -21,14 +21,14 @@ Commands:
   register <name> [capabilities]   Register agent
   unregister <name>                Unregister agent (go offline)
   heartbeat <name> [status_text]   Send heartbeat (keep alive)
-  agents                           List online agents
+  agents                           List agents
   discover [skill]                 Find agents by skill
   send <from> <to> <message>       Send direct message
   broadcast <from> <message>       Broadcast to all
   inbox <agent>                    Check inbox (unread messages)
   channels                         List channels
   channel <name>                   Channel details + messages
-  state set <ns> <key> <value>     Set shared state
+  state set <ns> <key> <value> <agent>   Set shared state
   state get <ns> <key>             Get shared state
   state delete <ns> <key>          Delete shared state
   feed [agent]                     Activity feed
