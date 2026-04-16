@@ -76,6 +76,51 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, ctx.agents.list());
   });
 
+  route('POST', '/api/agents', async (req, res) => {
+    const body = await readBody(req);
+    if (!body.name || typeof body.name !== 'string') {
+      return json(res, { error: 'name is required' }, 400);
+    }
+    const capabilities = Array.isArray(body.capabilities) ? body.capabilities : [];
+    const metadata =
+      body.metadata && typeof body.metadata === 'object' && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
+        : {};
+    const skills = Array.isArray(body.skills) ? body.skills : [];
+    try {
+      const agent = ctx.agents.register({
+        name: body.name,
+        capabilities,
+        metadata,
+        skills,
+      });
+      ctx.feed.logInternal(agent.id, 'register', agent.name, `via REST`);
+      // Auto-join channels if specified
+      const joined: string[] = [];
+      if (Array.isArray(body.channels)) {
+        for (const ch of body.channels) {
+          if (typeof ch === 'string') {
+            const created = ctx.channels.create(ch, agent.id);
+            ctx.channels.join(created.id, agent.id);
+            joined.push(ch);
+          }
+        }
+      }
+      json(res, { ...agent, joined_channels: joined }, 201);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      json(res, { error: msg }, 409);
+    }
+  });
+
+  route('DELETE', '/api/agents/:id', async (_req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.id);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    ctx.agents.updateStatus(agent.id, 'offline');
+    ctx.feed.logInternal(agent.id, 'unregister', agent.name, `via REST`);
+    json(res, { ok: true });
+  });
+
   route('GET', '/api/agents/:id', (_req, res, params) => {
     const agent = ctx.agents.resolveByNameOrId(params.id);
     if (!agent) return json(res, { error: 'Not found' }, 404);

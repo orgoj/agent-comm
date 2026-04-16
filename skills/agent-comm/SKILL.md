@@ -73,21 +73,21 @@ curl -X DELETE http://localhost:3420/api/agents/<agent-id>
 
 Base URL: `http://$COMM_HOST:$COMM_PORT`
 
-| Method | Endpoint                       | Purpose             |
-| ------ | ------------------------------ | ------------------- |
-| GET    | `/health`                      | Server status       |
-| GET    | `/api/agents`                  | List online agents  |
-| GET    | `/api/channels`                | List channels       |
-| GET    | `/api/channels/:name/messages` | Channel messages    |
-| GET    | `/api/messages?to=<agent>`     | Agent inbox         |
-| GET    | `/api/messages?from=<agent>`   | Sent messages       |
-| POST   | `/api/messages`                | Send message        |
-| GET    | `/api/state/:ns/:key`          | Get state           |
-| POST   | `/api/state/:ns/:key`          | Set state           |
-| DELETE | `/api/state/:ns/:key`          | Delete state        |
-| GET    | `/api/feed`                    | Activity feed       |
-| GET    | `/api/stuck`                   | Detect stuck agents |
-| GET    | `/api/overview`                | Full snapshot       |
+| Method | Endpoint                       | Purpose                                                         |
+| ------ | ------------------------------ | --------------------------------------------------------------- |
+| GET    | `/health`                      | Server status                                                   |
+| GET    | `/api/agents`                  | List online agents                                              |
+| GET    | `/api/channels`                | List channels                                                   |
+| GET    | `/api/channels/:name/messages` | Channel messages                                                |
+| GET    | `/api/messages?to=<agent>`     | Agent inbox                                                     |
+| GET    | `/api/messages?from=<agent>`   | Sent messages                                                   |
+| POST   | `/api/messages`                | Send message (`from`, `to`, `channel`, `content`, `importance`) |
+| GET    | `/api/state/:ns/:key`          | Get state                                                       |
+| POST   | `/api/state/:ns/:key`          | Set state                                                       |
+| DELETE | `/api/state/:ns/:key`          | Delete state                                                    |
+| GET    | `/api/feed`                    | Activity feed                                                   |
+| GET    | `/api/stuck`                   | Detect stuck agents                                             |
+| GET    | `/api/overview`                | Full snapshot                                                   |
 
 ## Patterns
 
@@ -111,7 +111,7 @@ state set progress task-43 "blocked: waiting for auth module"
 ```bash
 curl -X POST http://localhost:3420/api/messages \
   -H 'Content-Type: application/json' \
-  -d '{"from":"<id>","to":"<id>","content":"URGENT: production down","importance":"urgent"}'
+  -d '{"from":"<name>","to":"<name>","content":"URGENT: production down","importance":"urgent"}'
 ```
 
 Levels: `low`, `normal`, `high`, `urgent`.

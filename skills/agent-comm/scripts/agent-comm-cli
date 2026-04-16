@@ -44,6 +44,12 @@ get() {
   curl -s "$BASE$1"
 }
 
+# Resolve agent name to ID (returns name as-is if not found — API may still work with IDs)
+resolve_id() {
+  local name="$1"
+  curl -s "$BASE/api/agents" | jq -r ".[] | select(.name==\"$name\") | .id // \"$name\"" 2>/dev/null | head -1 || echo "$name"
+}
+
 case "${1:-}" in
   health)
     get /health
@@ -71,20 +77,21 @@ case "${1:-}" in
     msg="$*"
     if [[ "$to" == channel:* ]]; then
       ch="${to#channel:}"
-      api POST /api/messages -d "{\"from_agent\":\"$from\",\"channel\":\"$ch\",\"content\":\"$msg\"}"
+      api POST /api/messages -d "{\"from\":\"$from\",\"channel\":\"$ch\",\"content\":\"$msg\"}"
     else
-      api POST /api/messages -d "{\"from_agent\":\"$from\",\"to_agent\":\"$to\",\"content\":\"$msg\"}"
+      api POST /api/messages -d "{\"from\":\"$from\",\"to\":\"$to\",\"content\":\"$msg\"}"
     fi
     ;;
   broadcast)
     [ -z "${3:-}" ] && echo "Usage: agent-comm-cli broadcast <from> <message>" && exit 1
     from="$2"; shift 2
     msg="$*"
-    api POST /api/messages -d "{\"from_agent\":\"$from\",\"content\":\"$msg\"}"
+    api POST /api/messages -d "{\"from\":\"$from\",\"content\":\"$msg\"}"
     ;;
   inbox)
     [ -z "${2:-}" ] && echo "Usage: agent-comm-cli inbox <agent>" && exit 1
-    get "/api/messages?to=$2&limit=20"
+    agent_id=$(resolve_id "$2")
+    get "/api/messages?to=$agent_id&limit=20"
     ;;
   channels)
     get /api/channels
