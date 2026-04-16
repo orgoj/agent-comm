@@ -6,6 +6,6 @@ services:
     ports:
       - "3420:3420"
     volumes:
-      - ./data:/data
+      - ~/.agent-comm:/data
     environment:
       - AGENT_COMM_RETENTION_DAYS=30
