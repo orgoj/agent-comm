@@ -1,0 +1,13 @@
+node_modules
+data
+.git
+.github
+tests
+bench
+*.md
+!README.md
+husky
+playwright.config.ts
+vitest.config.ts
+eslint.config.js
+prettier.config.js

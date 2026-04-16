@@ -1,0 +1,11 @@
+services:
+  agent-comm:
+    build: .
+    container_name: agent-comm
+    restart: unless-stopped
+    ports:
+      - "3420:3420"
+    volumes:
+      - ./data:/data
+    environment:
+      - AGENT_COMM_RETENTION_DAYS=30
