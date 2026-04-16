@@ -112,5 +112,7 @@ Send each remote agent:
 ## Troubleshooting
 
 - **Port conflict**: Edit `docker-compose.yml` — change the left side of `3420:3420`
-- **Agent gone after restart**: Agents must re-register after server restart (DB persists, but in-memory state is lost)
-- **Web UI**: Open `http://<hostname>:3420` in browser for dashboard
+- **Agent offline after Docker rebuild**: DB persists across rebuilds, but agents lose heartbeat and go `offline`. Re-register with the same `POST /api/agents` call — the server detects the existing offline agent and reactivates it (sets `status=online`, refreshes heartbeat). No need to delete + re-create. The heartbeat cron will also fix this on the next 2-minute tick.
+- **Compose modal empty dropdown**: The UI dropdown reads from `AC.state.agents` (populated via WebSocket). If no agents are registered, the list is empty. Make sure at least one agent is online. After code changes to UI files, you must `docker compose up -d --build` and re-register.
+- **Dev vs Prod port confusion**: Prod = Docker on 3420, Dev = `npm run dev` on 3421. Never run both on same port. Config in `~/.agent-comm/config.sh` should point to 3420 for production use.
+- **Web UI**: Open `http://<hostname>:3420` in browser for dashboard. Compose modal lets you send messages to any registered agent (including offline — messages queue in their inbox).
