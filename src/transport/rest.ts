@@ -235,18 +235,22 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, ctx.channels.members(channel.id));
   });
 
-  // Join a channel
+  // Join a channel (auto-creates if not exists)
   route('POST', '/api/channels/:name/join', async (req, res, params) => {
-    const channel = ctx.channels.getByName(params.name);
-    if (!channel) return json(res, { error: 'Channel not found' }, 404);
     const body = await readBody(req);
     const agentId = body.agent_id as string | undefined;
     if (!agentId || typeof agentId !== 'string')
       return json(res, { error: '"agent_id" is required' }, 400);
     const agent = ctx.agents.resolveByNameOrId(agentId);
     if (!agent) return json(res, { error: `Agent not found: ${agentId}` }, 404);
+
+    // Auto-create channel if it doesn't exist
+    let channel = ctx.channels.getByName(params.name);
+    if (!channel) {
+      channel = ctx.channels.create(params.name, agent.id);
+    }
     ctx.channels.join(channel.id, agent.id);
-    json(res, { ok: true });
+    json(res, { ok: true, channel });
   });
 
   // Leave a channel
@@ -739,6 +743,21 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
       return json(res, { error: '"agent_id" is required' }, 400);
     ctx.messages.delete(id, agentId);
     json(res, { deleted: true });
+  });
+
+  // Edit a message (sender only)
+  route('PATCH', '/api/messages/:id', async (req, res, params) => {
+    const id = parseInt(params.id, 10);
+    if (isNaN(id)) return json(res, { error: 'Invalid message ID' }, 400);
+    const body = await readBody(req);
+    const agentId = body.agent_id as string | undefined;
+    const content = body.content as string | undefined;
+    if (!agentId || typeof agentId !== 'string')
+      return json(res, { error: '"agent_id" is required' }, 400);
+    if (!content || typeof content !== 'string')
+      return json(res, { error: '"content" is required' }, 400);
+    const updated = ctx.messages.edit(id, agentId, content);
+    json(res, updated);
   });
 
   // Mark message as read

@@ -168,7 +168,7 @@ class Client:
         path = f"/api/agents/discover?{qs}" if qs else "/api/agents"
         return self._req("GET", path)
 
-    def send(self, to, content, importance=None):
+    def send(self, to, content, importance=None, thread_id=None):
         self._need_user()
         self._heartbeat()
         body: dict = {"from": self.user, "content": content}
@@ -178,6 +178,8 @@ class Client:
             body["to"] = to
         if importance:
             body["importance"] = importance
+        if thread_id:
+            body["thread_id"] = int(thread_id)
         return self._req("POST", "/api/messages", body)
 
     def broadcast(self, content, importance=None):
@@ -279,6 +281,35 @@ class Client:
         return self._req("POST", f"/api/channels/{urllib.parse.quote(name)}/leave",
                          {"agent_id": aid})
 
+    def create_channel(self, name, description=None):
+        self._need_user()
+        self._heartbeat()
+        aid = self._resolve(self.user)
+        body: dict = {"name": name, "created_by": aid}
+        if description:
+            body["description"] = description
+        return self._req("POST", "/api/channels", body)
+
+    def msg_edit(self, msg_id, content):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("PATCH", f"/api/messages/{msg_id}",
+                         {"agent_id": aid, "content": content})
+
+    def msg_delete(self, msg_id):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("DELETE", f"/api/messages/{msg_id}",
+                         {"agent_id": aid})
+
+    def read_status(self, msg_id):
+        self._heartbeat()
+        return self._req("GET", f"/api/messages/{msg_id}/read-status")
+
+    def thread(self, msg_id):
+        self._heartbeat()
+        return self._req("GET", f"/api/messages/{msg_id}/thread")
+
     def state_set(self, ns, key, value, ttl=None):
         self._need_user()
         self._heartbeat()
@@ -355,6 +386,7 @@ def main():
     snd.add_argument("to", help="Recipient name/ID or channel:NAME")
     snd.add_argument("content", help="Message content")
     snd.add_argument("--importance", choices=["low", "normal", "high", "urgent"])
+    snd.add_argument("--thread", type=int, help="Thread ID to reply to")
 
     bc = sub.add_parser("broadcast", help="Broadcast to all online agents")
     bc.add_argument("content", help="Message content")
@@ -390,6 +422,23 @@ def main():
 
     le = sub.add_parser("leave", help="Leave a channel")
     le.add_argument("channel")
+
+    cc = sub.add_parser("create-channel", help="Create a new channel")
+    cc.add_argument("name", help="Channel name")
+    cc.add_argument("--desc", help="Channel description")
+
+    me = sub.add_parser("msg-edit", help="Edit a message (sender only)")
+    me.add_argument("msg_id", type=int, help="Message ID")
+    me.add_argument("content", help="New content")
+
+    md = sub.add_parser("msg-delete", help="Delete a message (sender only)")
+    md.add_argument("msg_id", type=int, help="Message ID")
+
+    rs = sub.add_parser("read-status", help="Show who read a message")
+    rs.add_argument("msg_id", type=int, help="Message ID")
+
+    th = sub.add_parser("thread", help="Show message thread")
+    th.add_argument("msg_id", type=int, help="Root message ID")
 
     st = sub.add_parser("state", help="State operations")
     st_sub = st.add_subparsers(dest="state_cmd")
@@ -435,7 +484,7 @@ def main():
     elif cmd == "discover":
         output(c.discover(args.skill, args.tag))
     elif cmd == "send":
-        output(c.send(args.to, args.content, args.importance))
+        output(c.send(args.to, args.content, args.importance, args.thread))
     elif cmd == "broadcast":
         output(c.broadcast(args.content, args.importance))
     elif cmd == "inbox":
@@ -461,6 +510,16 @@ def main():
         output(c.join(args.channel))
     elif cmd == "leave":
         output(c.leave(args.channel))
+    elif cmd == "create-channel":
+        output(c.create_channel(args.name, args.desc))
+    elif cmd == "msg-edit":
+        output(c.msg_edit(args.msg_id, args.content))
+    elif cmd == "msg-delete":
+        output(c.msg_delete(args.msg_id))
+    elif cmd == "read-status":
+        output(c.read_status(args.msg_id))
+    elif cmd == "thread":
+        output(c.thread(args.msg_id))
     elif cmd == "state":
         if args.state_cmd == "set":
             output(c.state_set(args.namespace, args.key, args.value, args.ttl))
