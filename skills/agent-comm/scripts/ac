@@ -31,6 +31,7 @@ class Client:
         self.host = os.environ.get("COMM_HOST")
         self.port = os.environ.get("COMM_PORT")
         self.user = os.environ.get("COMM_USER")
+        self.auto_register = False
         self._load_config()
         self.base = f"http://{self.host}:{self.port}"
         self._id_cache: dict[str, str] = {}
@@ -103,6 +104,13 @@ class Client:
         if not self.user:
             print("Error: COMM_USER not set", file=sys.stderr)
             sys.exit(1)
+        if self.auto_register:
+            # Try register — if already exists, server returns existing agent
+            try:
+                self.register()
+            except SystemExit:
+                pass  # Already registered or other non-fatal error
+            self.auto_register = False  # Only try once
 
     def _resolve(self, name: str) -> str:
         """Resolve agent name → ID (with caching)."""
@@ -348,6 +356,46 @@ class Client:
     def overview(self):
         return self._req("GET", "/api/overview")
 
+    def wait_replies(self, count, timeout=120, exclude_self=True):
+        """Wait for N distinct replies from different senders.
+
+        Polls inbox until 'count' unique senders have replied, or timeout.
+        Returns list of reply messages.
+        """
+        import time
+
+        self._need_user()
+        aid = self._resolve(self.user)
+        deadline = time.monotonic() + timeout
+        seen_senders: set[str] = set()
+        replies: list = []
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            poll_sec = min(int(remaining), 55)
+            msgs = self._req("GET",
+                             f"/api/agents/{aid}/poll?timeout={poll_sec}",
+                             timeout=poll_sec + 5)
+
+            if msgs and isinstance(msgs, list):
+                for msg in msgs:
+                    if not isinstance(msg, dict):
+                        continue
+                    sender = msg.get("from_agent", "")
+                    if exclude_self and sender == self.user:
+                        continue
+                    if sender and sender not in seen_senders:
+                        seen_senders.add(sender)
+                        replies.append(msg)
+                        self.mark_read(msg["id"])
+                        if len(replies) >= count:
+                            return replies
+
+        return replies
+
 
 # ── Output ───────────────────────────────────────────────────────────────────
 
@@ -364,6 +412,8 @@ def main():
         prog="ac",
         description="agent-comm CLI client",
     )
+    p.add_argument("--auto-register", action="store_true",
+                   help="Auto-register before first command")
     sub = p.add_subparsers(dest="cmd")
 
     sub.add_parser("health", help="Server health check")
@@ -463,12 +513,19 @@ def main():
 
     sub.add_parser("overview", help="Full system overview")
 
+    wr = sub.add_parser("wait-replies", help="Wait for N distinct agent replies")
+    wr.add_argument("--count", type=int, required=True,
+                    help="Number of distinct replies to wait for")
+    wr.add_argument("--timeout", type=int, default=120,
+                    help="Max wait in seconds (default 120)")
+
     args = p.parse_args()
     if not args.cmd:
         p.print_help()
         sys.exit(1)
 
     c = Client()
+    c.auto_register = args.auto_register
     cmd = args.cmd
 
     if cmd == "health":
@@ -536,6 +593,13 @@ def main():
         output(c.stuck())
     elif cmd == "overview":
         output(c.overview())
+    elif cmd == "wait-replies":
+        result = c.wait_replies(args.count, args.timeout)
+        if result:
+            output(result)
+        else:
+            print(f"Timeout: got 0/{args.count} replies", file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
