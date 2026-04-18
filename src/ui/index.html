@@ -229,7 +229,15 @@
         </section>
 
         <section id="view-channels" class="view" role="tabpanel" aria-labelledby="tab-channels">
-          <h2><span class="material-symbols-outlined view-icon">forum</span>Channels</h2>
+          <h2>
+            <span><span class="material-symbols-outlined view-icon">forum</span>Channels</span>
+            <button id="create-channel-btn" class="header-action-btn" title="Create channel">
+              <span class="material-symbols-outlined" style="font-size: 20px; vertical-align: -3px"
+                >add</span
+              >
+              New channel
+            </button>
+          </h2>
           <div id="channels-list" class="card-grid"></div>
         </section>
 
@@ -321,6 +329,69 @@
       </div>
     </div>
     <div id="toast-container" class="toast-container" aria-live="polite"></div>
+    <div id="create-channel-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
+      <div class="modal" style="max-width: 420px">
+        <h3><span class="material-symbols-outlined panel-icon">forum</span>Create Channel</h3>
+        <div class="compose-form">
+          <label for="channel-name" style="display: block; margin-bottom: 4px; font-weight: 500"
+            >Channel name</label
+          >
+          <input
+            id="channel-name"
+            type="text"
+            placeholder="e.g. general, engineering"
+            style="
+              width: 100%;
+              padding: 8px 12px;
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              background: var(--bg-surface);
+              color: var(--text);
+              font-size: 14px;
+              box-sizing: border-box;
+            "
+            required
+          />
+          <label for="channel-desc" style="display: block; margin: 12px 0 4px; font-weight: 500"
+            >Description (optional)</label
+          >
+          <input
+            id="channel-desc"
+            type="text"
+            placeholder="What is this channel about?"
+            style="
+              width: 100%;
+              padding: 8px 12px;
+              border: 1px solid var(--border);
+              border-radius: 8px;
+              background: var(--bg-surface);
+              color: var(--text);
+              font-size: 14px;
+              box-sizing: border-box;
+            "
+          />
+        </div>
+        <div class="modal-footer" style="margin-top: 16px">
+          <button id="create-channel-cancel" class="modal-cancel">Cancel</button>
+          <button
+            id="create-channel-submit"
+            style="
+              background: var(--accent);
+              color: #fff;
+              border: none;
+              padding: 8px 24px;
+              border-radius: 8px;
+              font-size: 14px;
+              font-weight: 500;
+              cursor: pointer;
+            "
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div id="compose-modal" class="modal-overlay hidden" role="dialog" aria-modal="true">
       <div class="modal" style="max-width: 480px">
         <h3><span class="material-symbols-outlined panel-icon">edit</span>Send Message</h3>

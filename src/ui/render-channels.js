@@ -56,4 +56,66 @@
   }
 
   AC.renderChannels = renderChannels;
+
+  // ── Create channel modal ─────────────────────────────────────────────────
+  AC.initChannelCreate = function () {
+    var modal = AC._root.getElementById('create-channel-modal');
+    var btn = AC._root.getElementById('create-channel-btn');
+    var nameInput = AC._root.getElementById('channel-name');
+    var descInput = AC._root.getElementById('channel-desc');
+    var submitBtn = AC._root.getElementById('create-channel-submit');
+    var cancelBtn = AC._root.getElementById('create-channel-cancel');
+
+    function open() {
+      nameInput.value = '';
+      descInput.value = '';
+      modal.classList.remove('hidden');
+      nameInput.focus();
+    }
+    function close() {
+      modal.classList.add('hidden');
+    }
+
+    btn.addEventListener('click', open);
+    cancelBtn.addEventListener('click', close);
+    modal.addEventListener('click', function (e) {
+      if (e.target === modal) close();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+    });
+
+    submitBtn.addEventListener('click', function () {
+      var name = nameInput.value.trim().toLowerCase().replace(/\s+/g, '-');
+      var desc = descInput.value.trim();
+      if (!name) {
+        AC.showToast('Error', 'Channel name is required');
+        return;
+      }
+      var humanAgent = AC._getHumanAgent();
+      var createdBy = humanAgent ? humanAgent.id : 'human';
+
+      AC._fetch('/api/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, description: desc, created_by: createdBy }),
+      })
+        .then(function (r) {
+          if (!r.ok)
+            return r.json().then(function (d) {
+              throw new Error(d.error || 'Failed');
+            });
+          return r.json();
+        })
+        .then(function () {
+          close();
+          AC.showToast('Created', 'Channel #' + name + ' created');
+          if (AC._ws && AC._ws.readyState === WebSocket.OPEN)
+            AC._ws.send(JSON.stringify({ type: 'refresh' }));
+        })
+        .catch(function (err) {
+          AC.showToast('Error', err.message || 'Failed to create channel');
+        });
+    });
+  };
 })();

@@ -201,6 +201,25 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, ctx.channels.list());
   });
 
+  // Create a channel
+  route('POST', '/api/channels', async (req, res) => {
+    const body = await readBody(req);
+    const name = body.name as string | undefined;
+    const description = body.description as string | undefined;
+    const createdBy = body.created_by as string | undefined;
+    if (!name || typeof name !== 'string') return json(res, { error: '"name" is required' }, 400);
+    if (!createdBy || typeof createdBy !== 'string')
+      return json(res, { error: '"created_by" is required' }, 400);
+    try {
+      const channel = ctx.channels.create(name, createdBy, description || undefined);
+      json(res, channel, 201);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const status = e instanceof ValidationError ? 400 : 500;
+      json(res, { error: msg }, status);
+    }
+  });
+
   route('GET', '/api/channels/:name', (_req, res, params) => {
     const channel = ctx.channels.getByName(params.name);
     if (!channel) return json(res, { error: 'Not found' }, 404);

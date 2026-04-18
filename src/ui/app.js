@@ -95,6 +95,7 @@
     var host = AC._wsUrl || location.host;
     var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(protocol + '//' + host);
+    AC._ws = ws;
 
     ws.onopen = function () {
       setConnectionStatus('connected', 'Connected');
@@ -802,6 +803,9 @@
 
     // Expose openCompose globally so render-messages can call it for reply
     AC.openCompose = openCompose;
+
+    // Initialize create channel dialog
+    AC.initChannelCreate();
 
     // Event delegation for morphdom-managed containers
     AC._root.getElementById('agents-list').addEventListener('click', function (e) {

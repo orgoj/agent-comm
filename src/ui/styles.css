@@ -477,6 +477,33 @@ body {
   letter-spacing: -0.4px;
 }
 
+.header-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+.header-action-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+#view-channels h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .overview-header {
   display: flex;
   align-items: center;
