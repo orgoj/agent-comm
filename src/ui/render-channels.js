@@ -84,6 +84,12 @@
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
     });
+    nameInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') submitBtn.click();
+    });
+    descInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') submitBtn.click();
+    });
 
     submitBtn.addEventListener('click', function () {
       var name = nameInput.value.trim().toLowerCase().replace(/\s+/g, '-');

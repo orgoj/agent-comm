@@ -70,7 +70,7 @@
   }
 
   function setMessageFilter(type, value) {
-    AC.messageFilters[type] = AC.messageFilters[type] === value ? null : value;
+    AC.messageFilters[type] = value;
     AC.searchResults = null;
     AC.msgDisplayCount = MSG_PAGE_SIZE;
     var searchInput = AC._root.getElementById('msg-search');

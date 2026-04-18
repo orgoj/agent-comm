@@ -396,24 +396,71 @@
       <div class="modal" style="max-width: 480px">
         <h3><span class="material-symbols-outlined panel-icon">edit</span>Send Message</h3>
         <div class="compose-form">
-          <label for="compose-to" style="display: block; margin-bottom: 4px; font-weight: 500"
-            >To (agent)</label
-          >
-          <select
-            id="compose-to"
-            style="
-              width: 100%;
-              padding: 8px 12px;
-              border: 1px solid var(--border);
-              border-radius: 8px;
-              background: var(--bg-surface);
-              color: var(--text);
-              font-size: 14px;
-            "
-            required
-          >
-            <option value="">Select agent...</option>
-          </select>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px">
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                cursor: pointer;
+                font-weight: 500;
+              "
+            >
+              <input type="radio" name="compose-target-type" value="agent" checked /> Agent
+            </label>
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 4px;
+                cursor: pointer;
+                font-weight: 500;
+              "
+            >
+              <input type="radio" name="compose-target-type" value="channel" /> Channel
+            </label>
+          </div>
+          <div id="compose-target-agent">
+            <label for="compose-to" style="display: block; margin-bottom: 4px; font-weight: 500"
+              >To (agent)</label
+            >
+            <select
+              id="compose-to"
+              style="
+                width: 100%;
+                padding: 8px 12px;
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                background: var(--bg-surface);
+                color: var(--text);
+                font-size: 14px;
+              "
+              required
+            >
+              <option value="">Select agent...</option>
+            </select>
+          </div>
+          <div id="compose-target-channel" style="display: none">
+            <label
+              for="compose-channel"
+              style="display: block; margin-bottom: 4px; font-weight: 500"
+              >Channel</label
+            >
+            <select
+              id="compose-channel"
+              style="
+                width: 100%;
+                padding: 8px 12px;
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                background: var(--bg-surface);
+                color: var(--text);
+                font-size: 14px;
+              "
+            >
+              <option value="">Select channel...</option>
+            </select>
+          </div>
           <label for="compose-content" style="display: block; margin: 12px 0 4px; font-weight: 500"
             >Message</label
           >

@@ -716,9 +716,26 @@
     var composeTo = AC._root.getElementById('compose-to');
     var composeContent = AC._root.getElementById('compose-content');
     var composeImportance = AC._root.getElementById('compose-importance');
+    var composeChannel = AC._root.getElementById('compose-channel');
+    var composeRadios = AC._root.querySelectorAll('input[name="compose-target-type"]');
+    var targetAgentDiv = AC._root.getElementById('compose-target-agent');
+    var targetChannelDiv = AC._root.getElementById('compose-target-channel');
 
-    function openCompose(agentName, threadId) {
-      // Populate agent dropdown — show all registered agents (offline included, marked)
+    function getComposeTargetType() {
+      var checked = AC._root.querySelector('input[name="compose-target-type"]:checked');
+      return checked ? checked.value : 'agent';
+    }
+
+    composeRadios.forEach(function (r) {
+      r.addEventListener('change', function () {
+        var isChannel = getComposeTargetType() === 'channel';
+        targetAgentDiv.style.display = isChannel ? 'none' : '';
+        targetChannelDiv.style.display = isChannel ? '' : 'none';
+      });
+    });
+
+    function openCompose(agentName, threadId, channelName) {
+      // Populate agent dropdown
       var agents = (AC.state.agents || []).filter(function (a) {
         return a.name !== 'human';
       });
@@ -738,15 +755,42 @@
             );
           })
           .join('');
+
+      // Populate channel dropdown
+      var channels = AC.state.channels || [];
+      composeChannel.innerHTML =
+        '<option value="">Select channel...</option>' +
+        channels
+          .map(function (ch) {
+            return (
+              '<option value="' +
+              AC.escAttr(ch.name) +
+              '"' +
+              (ch.name === channelName ? ' selected' : '') +
+              '>' +
+              AC.esc('#' + ch.name) +
+              '</option>'
+            );
+          })
+          .join('');
+
+      // Set target type
+      var isChannel = !!channelName;
+      composeRadios.forEach(function (r) {
+        r.checked = isChannel ? r.value === 'channel' : r.value === 'agent';
+      });
+      targetAgentDiv.style.display = isChannel ? 'none' : '';
+      targetChannelDiv.style.display = isChannel ? '' : 'none';
+
       composeContent.value = '';
       composeImportance.value = 'normal';
       var threadInput = AC._root.getElementById('compose-thread-id');
       if (threadInput) threadInput.value = threadId || '';
       composeModal.classList.remove('hidden');
-      if (agentName) {
+      if (agentName || channelName) {
         composeContent.focus();
       } else {
-        composeTo.focus();
+        (isChannel ? composeChannel : composeTo).focus();
       }
     }
 
@@ -755,21 +799,30 @@
     }
 
     function sendCompose() {
-      var to = composeTo.value;
+      var isChannel = getComposeTargetType() === 'channel';
+      var target = isChannel ? composeChannel.value : composeTo.value;
       var content = composeContent.value.trim();
       var importance = composeImportance.value;
       var threadInput = AC._root.getElementById('compose-thread-id');
       var threadId = threadInput ? parseInt(threadInput.value, 10) : NaN;
-      if (!to) {
-        showToast('Error', 'Select an agent');
+
+      if (!target) {
+        showToast('Error', isChannel ? 'Select a channel' : 'Select an agent');
         return;
       }
       if (!content) {
         showToast('Error', 'Enter a message');
         return;
       }
-      var payload = { to: to, content: content, importance: importance };
+
+      var payload;
+      if (isChannel) {
+        payload = { channel: target, content: content, importance: importance };
+      } else {
+        payload = { to: target, content: content, importance: importance };
+      }
       if (threadId && !isNaN(threadId)) payload.thread_id = threadId;
+
       AC._fetch('/api/messages/human', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -784,7 +837,10 @@
         })
         .then(function () {
           closeCompose();
-          showToast('Sent', 'Message delivered to ' + to);
+          showToast(
+            'Sent',
+            isChannel ? 'Message sent to #' + target : 'Message delivered to ' + target,
+          );
           if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'refresh' }));
         })
         .catch(function (err) {
@@ -799,6 +855,9 @@
     });
     composeContent.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendCompose();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !composeModal.classList.contains('hidden')) closeCompose();
     });
 
     // Expose openCompose globally so render-messages can call it for reply

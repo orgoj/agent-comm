@@ -577,10 +577,15 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
   route('POST', '/api/messages/human', async (req, res) => {
     const body = await readBody(req);
     const to = body.to as string | undefined;
+    const channel = body.channel as string | undefined;
     const content = body.content as string | undefined;
 
-    if (!to || typeof to !== 'string')
-      return json(res, { error: '"to" (agent name or ID) is required' }, 400);
+    if (
+      (!to && !channel) ||
+      (to && typeof to !== 'string') ||
+      (channel && typeof channel !== 'string')
+    )
+      return json(res, { error: '"to" or "channel" is required' }, 400);
     if (!content || typeof content !== 'string')
       return json(res, { error: '"content" is required' }, 400);
 
