@@ -49,6 +49,11 @@
 
   var ws = null;
   var reconnectTimer = null;
+  var humanHeartbeatInterval = null;
+
+  function humanHeartbeat() {
+    AC._fetch('/api/human/heartbeat', { method: 'POST' }).catch(function () {});
+  }
   var loaded = false;
 
   // -----------------------------------------------------------------------
@@ -94,6 +99,10 @@
     ws.onopen = function () {
       setConnectionStatus('connected', 'Connected');
       clearTimeout(reconnectTimer);
+      // Keep human agent online while dashboard is open
+      humanHeartbeat();
+      clearInterval(humanHeartbeatInterval);
+      humanHeartbeatInterval = setInterval(humanHeartbeat, 30000);
     };
 
     ws.onmessage = function (event) {
@@ -107,6 +116,7 @@
 
     ws.onclose = function () {
       setConnectionStatus('disconnected', 'Disconnected');
+      clearInterval(humanHeartbeatInterval);
       reconnectTimer = setTimeout(connect, 3000);
     };
 

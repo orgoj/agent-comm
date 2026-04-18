@@ -533,6 +533,28 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
 
   // Human compose — auto-registers a "human" proxy agent for dashboard messages
   const HUMAN_AGENT_NAME = 'human';
+
+  // Human heartbeat — keeps human agent online while dashboard is open
+  function ensureHumanAgent() {
+    let agent = ctx.agents.resolveByNameOrId(HUMAN_AGENT_NAME);
+    if (!agent) {
+      agent = ctx.agents.register(
+        { name: HUMAN_AGENT_NAME, capabilities: [] },
+        { allowReserved: true },
+      );
+      ctx.feed.logInternal(agent.id, 'register', HUMAN_AGENT_NAME, 'auto-registered via dashboard');
+    } else if (agent.status === 'offline') {
+      ctx.agents.reactivate(agent.id);
+    }
+    return agent;
+  }
+
+  route('POST', '/api/human/heartbeat', (_req, res) => {
+    const agent = ensureHumanAgent();
+    ctx.agents.heartbeat(agent.id);
+    json(res, { ok: true, agent_id: agent.id, name: agent.name });
+  });
+
   route('POST', '/api/messages/human', async (req, res) => {
     const body = await readBody(req);
     const to = body.to as string | undefined;
@@ -544,21 +566,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
       return json(res, { error: '"content" is required' }, 400);
 
     // Ensure "human" proxy agent exists and is online
-    let sender = ctx.agents.resolveByNameOrId(HUMAN_AGENT_NAME);
-    if (!sender) {
-      sender = ctx.agents.register(
-        { name: HUMAN_AGENT_NAME, capabilities: [] },
-        { allowReserved: true },
-      );
-      ctx.feed.logInternal(
-        sender.id,
-        'register',
-        HUMAN_AGENT_NAME,
-        'auto-registered via dashboard',
-      );
-    } else if (sender.status === 'offline') {
-      ctx.agents.reactivate(sender.id);
-    }
+    const sender = ensureHumanAgent();
 
     processSendMessage(res, { ...body, from: HUMAN_AGENT_NAME }, sender);
   });
