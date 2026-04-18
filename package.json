@@ -24,7 +24,7 @@
   },
   "scripts": {
     "build": "tsc && node scripts/copy-ui.js",
-    "dev": "concurrently -k -n tsc,srv -c blue,green \"tsc --watch\" \"nodemon --watch dist --ext js,html,css,json --delay 1 dist/server.js\"",
+    "dev": "concurrently -k -n tsc,srv -c blue,green \"tsc --watch\" \"nodemon --watch dist --ext js,html,css,json --delay 1 -- dist/server.js --db ./data/agent-comm.db --port 3421\"",
     "dev:mcp": "tsc --watch",
     "start": "node dist/index.js",
     "start:server": "node dist/server.js",
