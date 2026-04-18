@@ -490,6 +490,7 @@
 
   // Export switchView so render-messages can use it
   AC.switchView = switchView;
+  // openCompose is defined inside _init — assigned there after DOM ready
 
   function handleHash() {
     var hash = location.hash.replace('#', '') || 'overview';
@@ -705,7 +706,7 @@
     var composeContent = AC._root.getElementById('compose-content');
     var composeImportance = AC._root.getElementById('compose-importance');
 
-    function openCompose(agentName) {
+    function openCompose(agentName, threadId) {
       // Populate agent dropdown — show all registered agents (offline included, marked)
       var agents = (AC.state.agents || []).filter(function (a) {
         return a.name !== 'human';
@@ -728,6 +729,8 @@
           .join('');
       composeContent.value = '';
       composeImportance.value = 'normal';
+      var threadInput = AC._root.getElementById('compose-thread-id');
+      if (threadInput) threadInput.value = threadId || '';
       composeModal.classList.remove('hidden');
       if (agentName) {
         composeContent.focus();
@@ -744,6 +747,8 @@
       var to = composeTo.value;
       var content = composeContent.value.trim();
       var importance = composeImportance.value;
+      var threadInput = AC._root.getElementById('compose-thread-id');
+      var threadId = threadInput ? parseInt(threadInput.value, 10) : NaN;
       if (!to) {
         showToast('Error', 'Select an agent');
         return;
@@ -752,10 +757,12 @@
         showToast('Error', 'Enter a message');
         return;
       }
+      var payload = { to: to, content: content, importance: importance };
+      if (threadId && !isNaN(threadId)) payload.thread_id = threadId;
       AC._fetch('/api/messages/human', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: to, content: content, importance: importance }),
+        body: JSON.stringify(payload),
       })
         .then(function (r) {
           if (!r.ok)
@@ -782,6 +789,9 @@
     composeContent.addEventListener('keydown', function (e) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendCompose();
     });
+
+    // Expose openCompose globally so render-messages can call it for reply
+    AC.openCompose = openCompose;
 
     // Event delegation for morphdom-managed containers
     AC._root.getElementById('agents-list').addEventListener('click', function (e) {

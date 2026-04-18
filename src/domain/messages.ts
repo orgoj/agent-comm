@@ -210,7 +210,8 @@ export class MessageService {
       params.push(options.offset);
     }
 
-    return this.db.queryAll<MessageRow>(sql, params).map(rowToMessage);
+    const messages = this.db.queryAll<MessageRow>(sql, params).map(rowToMessage);
+    return this.attachReadBy(messages);
   }
 
   /** Get the inbox for an agent: direct messages + messages from joined channels */
@@ -246,7 +247,35 @@ export class MessageService {
     sql += ` ORDER BY m.created_at DESC LIMIT ?`;
     params.push(limit);
 
-    return this.db.queryAll<MessageRow>(sql, params).map(rowToMessage);
+    const messages = this.db.queryAll<MessageRow>(sql, params).map(rowToMessage);
+    return this.attachReadBy(messages);
+  }
+
+  /** Batch-attach read_by (agent names) to a list of messages. One query for all IDs. */
+  private attachReadBy(messages: Message[]): Message[] {
+    if (messages.length === 0) return messages;
+
+    const ids = messages.map((m) => m.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const rows = this.db.queryAll<{ message_id: number; agent_name: string }>(
+      `SELECT mr.message_id, a.name AS agent_name
+       FROM message_reads mr
+       JOIN agents a ON a.id = mr.agent_id
+       WHERE mr.message_id IN (${placeholders})`,
+      ids,
+    );
+
+    const readByMap = new Map<number, string[]>();
+    for (const row of rows) {
+      const arr = readByMap.get(row.message_id) ?? [];
+      arr.push(row.agent_name);
+      readByMap.set(row.message_id, arr);
+    }
+
+    return messages.map((m) => ({
+      ...m,
+      read_by: readByMap.get(m.id) ?? [],
+    }));
   }
 
   /** Get full thread starting from a root message */

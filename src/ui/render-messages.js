@@ -12,6 +12,24 @@
   var searchDebounce = null;
   AC.searchResults = null;
 
+  /** Check if a message is unread by the human agent */
+  AC._isUnreadForHuman = function (m) {
+    var humanAgent = AC._getHumanAgent();
+    if (!humanAgent) return false;
+    if (m.to_agent !== humanAgent.id) return false;
+    var readBy = m.read_by || [];
+    return readBy.indexOf('human') === -1;
+  };
+
+  /** Get the human agent object from state */
+  AC._getHumanAgent = function () {
+    var agents = AC.state.agents || [];
+    for (var i = 0; i < agents.length; i++) {
+      if (agents[i].name === 'human') return agents[i];
+    }
+    return null;
+  };
+
   // Lazy loading state
   var MSG_PAGE_SIZE = 50;
   AC.msgDisplayCount = MSG_PAGE_SIZE;
@@ -235,6 +253,7 @@
               m.id +
               '">' +
               '<div class="msg-compact-header">' +
+              (AC._isUnreadForHuman(m) ? '<span class="unread-dot" title="Unread"></span>' : '') +
               '<span class="message-avatar">' +
               AC.esc(AC.getInitials(fromName)) +
               '</span>' +
@@ -473,6 +492,44 @@
       html += '<div class="detail-body prose">' + AC.renderMd(msg.content) + '</div>';
     }
 
+    // Read status
+    var readBy = msg.read_by || [];
+    if (readBy.length > 0) {
+      html +=
+        '<div class="detail-read-by">' +
+        '<span class="material-symbols-outlined" style="font-size:14px;vertical-align:-2px;margin-right:4px;color:var(--text-dim)">visibility</span>' +
+        'Read by: ' +
+        readBy
+          .map(function (n) {
+            return '<strong>' + AC.esc(n) + '</strong>';
+          })
+          .join(', ') +
+        '</div>';
+    }
+
+    // Action buttons for human recipient
+    var humanAgent = AC._getHumanAgent();
+    if (humanAgent && msg.to_agent === humanAgent.id) {
+      html += '<div class="detail-actions">';
+      if (readBy.indexOf('human') === -1) {
+        html +=
+          '<button class="detail-action-btn mark-read-btn" data-msg-id="' +
+          msg.id +
+          '" data-agent-id="' +
+          AC.escAttr(humanAgent.id) +
+          '">' +
+          '<span class="material-symbols-outlined" style="font-size:14px;vertical-align:-2px;margin-right:4px">visibility</span>Mark as read</button>';
+      }
+      html +=
+        '<button class="detail-action-btn reply-btn" data-from-agent="' +
+        AC.escAttr(msg.from_agent) +
+        '" data-thread-id="' +
+        msg.id +
+        '">' +
+        '<span class="material-symbols-outlined" style="font-size:14px;vertical-align:-2px;margin-right:4px">reply</span>Reply</button>';
+      html += '</div>';
+    }
+
     var msgBranches = (AC.state.branches || []).filter(function (b) {
       return b.parent_message_id === msg.id;
     });
@@ -546,6 +603,53 @@
         if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       });
     });
+
+    // Mark as read button handler
+    var markReadBtn = detailPane.querySelector('.mark-read-btn');
+    if (markReadBtn) {
+      markReadBtn.addEventListener('click', function () {
+        var msgId = this.getAttribute('data-msg-id');
+        var agentId = this.getAttribute('data-agent-id');
+        AC._fetch('/api/messages/' + msgId + '/read', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId }),
+        })
+          .then(function (r) {
+            if (!r.ok)
+              return r.json().then(function (d) {
+                throw new Error(d.error);
+              });
+            return r.json();
+          })
+          .then(function () {
+            // Update local state and re-render
+            var m = AC.findById(AC.state.messages, parseInt(msgId, 10));
+            if (m) {
+              if (!m.read_by) m.read_by = [];
+              if (m.read_by.indexOf('human') === -1) m.read_by.push('human');
+            }
+            renderMessages();
+          })
+          .catch(function (err) {
+            if (typeof AC.showToast === 'function')
+              AC.showToast('Error', err.message || 'Failed to mark as read');
+          });
+      });
+    }
+
+    // Reply button handler
+    var replyBtn = detailPane.querySelector('.reply-btn');
+    if (replyBtn) {
+      replyBtn.addEventListener('click', function () {
+        var fromAgent = this.getAttribute('data-from-agent');
+        var threadId = parseInt(this.getAttribute('data-thread-id'), 10);
+        var fromName = AC.resolveAgentName(fromAgent);
+        if (typeof AC.openCompose === 'function') {
+          AC.openCompose(fromName, threadId);
+        }
+      });
+    }
   }
 
   AC.setMessageFilter = setMessageFilter;

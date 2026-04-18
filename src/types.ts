@@ -65,6 +65,8 @@ export interface Message {
   readonly ack_required: boolean;
   readonly created_at: string;
   readonly edited_at: string | null;
+  /** Agent names who have read this message. Populated by list/inbox queries. */
+  read_by?: string[];
 }
 
 // ---------------------------------------------------------------------------

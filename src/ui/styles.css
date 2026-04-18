@@ -1331,6 +1331,27 @@ body {
   padding-left: 13px;
 }
 
+/* Unread indicator dot */
+.unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+  animation: unread-pulse 2s ease-in-out infinite;
+}
+
+@keyframes unread-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 .msg-compact-header {
   display: flex;
   align-items: center;
@@ -1524,6 +1545,54 @@ body {
   font-weight: 700;
   font-family: var(--font-mono);
   flex-shrink: 0;
+}
+
+/* Read status in detail */
+.detail-read-by {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 8px 0;
+  border-top: 1px solid var(--border-light);
+  margin-top: 8px;
+}
+
+.detail-read-by strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Action buttons in detail */
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-light);
+  margin-top: 4px;
+}
+
+.detail-action-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.detail-action-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+.mark-read-btn {
+  color: var(--accent);
+  border-color: var(--accent-dim);
 }
 
 .thread-msg-content {

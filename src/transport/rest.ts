@@ -273,6 +273,19 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, ctx.messages.thread(id));
   });
 
+  route('GET', '/api/messages/:id/read-status', (_req, res, params) => {
+    const id = parseInt(params.id, 10);
+    if (isNaN(id)) return json(res, { error: 'Invalid message ID' }, 400);
+    const msg = ctx.messages.getById(id);
+    if (!msg) return json(res, { error: 'Message not found' }, 404);
+    const reads = ctx.messages.readStatus(id);
+    const read_by = reads.map((r) => {
+      const agent = ctx.agents.resolveByNameOrId(r.agent_id);
+      return agent ? agent.name : r.agent_id;
+    });
+    json(res, { message_id: id, read_by });
+  });
+
   route('GET', '/api/search', (req, res) => {
     const url = new URL(req.url!, `http://${req.headers.host}`);
     const query = url.searchParams.get('q');
