@@ -55,6 +55,7 @@ export function createContext(dbOptions?: DbOptions): AppContext {
 
   // Wire cross-service dependencies (avoids circular imports)
   messages.setAgentLookup(agents);
+  messages.setChannelLookup(channels);
 
   return {
     db,

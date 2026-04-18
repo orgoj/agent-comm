@@ -76,6 +76,14 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, ctx.agents.list({ includeOffline: true }));
   });
 
+  // Discover agents by skill/tag (online only, filtered)
+  route('GET', '/api/agents/discover', (req, res) => {
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    const skill = url.searchParams.get('skill') ?? undefined;
+    const tag = url.searchParams.get('tag') ?? undefined;
+    json(res, ctx.agents.discover({ skill, tag }));
+  });
+
   route('POST', '/api/agents', async (req, res) => {
     const body = await readBody(req);
     if (!body.name || typeof body.name !== 'string') {
@@ -160,6 +168,35 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, { ok: true, agent_id: agent.id, name: agent.name });
   });
 
+  // Agent inbox — direct messages + channel messages
+  route('GET', '/api/agents/:id/inbox', (req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.id);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    const unread = url.searchParams.get('unread') === 'true';
+    const limit = Math.min(
+      Math.max(1, parseInt(url.searchParams.get('limit') ?? '50', 10) || 50),
+      500,
+    );
+    json(res, ctx.messages.inbox(agent.id, { unreadOnly: unread, limit }));
+  });
+
+  // Blocking poll — wait for new inbox messages (event-driven, capped 60s)
+  route('GET', '/api/agents/:id/poll', async (req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.id);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    const url = new URL(req.url!, `http://${req.headers.host}`);
+    const timeoutSec = Math.min(
+      Math.max(0, parseInt(url.searchParams.get('timeout') ?? '60', 10) || 60),
+      60,
+    );
+    const all = url.searchParams.get('all') === 'true';
+    const messages = await ctx.messages.pollInbox(agent.id, timeoutSec * 1000, {
+      unreadOnly: !all,
+    });
+    json(res, messages);
+  });
+
   route('GET', '/api/channels', (_req, res) => {
     json(res, ctx.channels.list());
   });
@@ -177,6 +214,34 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     const channel = ctx.channels.getByName(params.name);
     if (!channel) return json(res, { error: 'Not found' }, 404);
     json(res, ctx.channels.members(channel.id));
+  });
+
+  // Join a channel
+  route('POST', '/api/channels/:name/join', async (req, res, params) => {
+    const channel = ctx.channels.getByName(params.name);
+    if (!channel) return json(res, { error: 'Channel not found' }, 404);
+    const body = await readBody(req);
+    const agentId = body.agent_id as string | undefined;
+    if (!agentId || typeof agentId !== 'string')
+      return json(res, { error: '"agent_id" is required' }, 400);
+    const agent = ctx.agents.resolveByNameOrId(agentId);
+    if (!agent) return json(res, { error: `Agent not found: ${agentId}` }, 404);
+    ctx.channels.join(channel.id, agent.id);
+    json(res, { ok: true });
+  });
+
+  // Leave a channel
+  route('POST', '/api/channels/:name/leave', async (req, res, params) => {
+    const channel = ctx.channels.getByName(params.name);
+    if (!channel) return json(res, { error: 'Channel not found' }, 404);
+    const body = await readBody(req);
+    const agentId = body.agent_id as string | undefined;
+    if (!agentId || typeof agentId !== 'string')
+      return json(res, { error: '"agent_id" is required' }, 400);
+    const agent = ctx.agents.resolveByNameOrId(agentId);
+    if (!agent) return json(res, { error: `Agent not found: ${agentId}` }, 404);
+    ctx.channels.leave(channel.id, agent.id);
+    json(res, { ok: true });
   });
 
   route('GET', '/api/channels/:name/messages', (req, res, params) => {
@@ -498,6 +563,31 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     processSendMessage(res, body, sender);
   });
 
+  // Broadcast — send to all online agents (excluding sender)
+  route('POST', '/api/messages/broadcast', async (req, res) => {
+    const body = await readBody(req);
+    const from = body.from as string | undefined;
+    if (!from || typeof from !== 'string')
+      return json(res, { error: '"from" (agent name or ID) is required' }, 400);
+    const sender = ctx.agents.resolveByNameOrId(from);
+    if (!sender) return json(res, { error: `Agent not found: ${from}` }, 404);
+    if (sender.status === 'offline')
+      return json(res, { error: `Agent "${sender.name}" is offline` }, 403);
+    const content = body.content as string | undefined;
+    if (!content || typeof content !== 'string')
+      return json(res, { error: '"content" is required' }, 400);
+    const importance = body.importance as string | undefined;
+    const VALID = new Set(['low', 'normal', 'high', 'urgent']);
+    if (importance && !VALID.has(importance))
+      return json(res, { error: '"importance" must be one of: low, normal, high, urgent' }, 400);
+    const messages = ctx.messages.broadcast(
+      sender.id,
+      content,
+      (importance ?? 'normal') as 'low' | 'normal' | 'high' | 'urgent',
+    );
+    json(res, messages, 201);
+  });
+
   route('POST', '/api/state/:namespace/:key', async (req, res, params) => {
     const body = await readBody(req);
     const value = body.value as string | undefined;
@@ -604,6 +694,28 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
       return json(res, { error: '"agent_id" is required' }, 400);
     ctx.messages.delete(id, agentId);
     json(res, { deleted: true });
+  });
+
+  // Mark message as read
+  route('POST', '/api/messages/:id/read', async (req, res, params) => {
+    const msgId = parseInt(params.id, 10);
+    if (isNaN(msgId)) return json(res, { error: 'Invalid message ID' }, 400);
+    const body = await readBody(req);
+    const agentId = body.agent_id as string | undefined;
+    if (!agentId || typeof agentId !== 'string')
+      return json(res, { error: '"agent_id" is required' }, 400);
+    const agent = ctx.agents.resolveByNameOrId(agentId);
+    if (!agent) return json(res, { error: `Agent not found: ${agentId}` }, 404);
+    ctx.messages.markRead(msgId, agent.id);
+    json(res, { ok: true });
+  });
+
+  // Mark all inbox messages as read
+  route('POST', '/api/agents/:id/read-all', async (_req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.id);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    const count = ctx.messages.markAllRead(agent.id);
+    json(res, { ok: true, marked: count });
   });
 
   // -----------------------------------------------------------------------

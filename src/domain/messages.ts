@@ -59,8 +59,13 @@ export interface AgentLookup {
   list(options?: { status?: string; includeOffline?: boolean }): { id: string }[];
 }
 
+export interface ChannelLookup {
+  isMember(channelId: string, agentId: string): boolean;
+}
+
 export class MessageService {
   private agentLookup: AgentLookup | null = null;
+  private channelLookup: ChannelLookup | null = null;
 
   constructor(
     private readonly db: Db,
@@ -70,6 +75,11 @@ export class MessageService {
   /** Inject agent lookup to avoid circular dependency */
   setAgentLookup(lookup: AgentLookup): void {
     this.agentLookup = lookup;
+  }
+
+  /** Inject channel lookup to avoid circular dependency */
+  setChannelLookup(lookup: ChannelLookup): void {
+    this.channelLookup = lookup;
   }
 
   send(fromAgentId: string, input: MessageSendInput): Message {
@@ -255,6 +265,14 @@ export class MessageService {
   markRead(messageId: number, agentId: string): void {
     const msg = this.getById(messageId);
     if (!msg) throw new NotFoundError('Message', String(messageId));
+
+    // Only the recipient can mark a message as read
+    const isDirectRecipient = msg.to_agent === agentId;
+    const isChannelRecipient =
+      msg.channel_id && this.channelLookup?.isMember(msg.channel_id, agentId);
+    if (!isDirectRecipient && !isChannelRecipient) {
+      throw new ValidationError('Only the recipient can mark a message as read');
+    }
 
     this.db.run(`INSERT OR IGNORE INTO message_reads (message_id, agent_id) VALUES (?, ?)`, [
       messageId,

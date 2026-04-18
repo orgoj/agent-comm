@@ -1,0 +1,483 @@
+#!/usr/bin/env python3
+"""ac — agent-comm CLI client. Pure Python stdlib, no external dependencies.
+
+Environment variables:
+  COMM_USER   Agent identity (required for most commands)
+  COMM_HOST   Server hostname (default: from config or cislo5.lan)
+  COMM_PORT   Server port (default: from config or 3420)
+
+Config file: ~/.agent-comm/config.sh  (COMM_HOST=... COMM_PORT=...)
+"""
+
+import json
+import os
+import sys
+import urllib.request
+import urllib.error
+import urllib.parse
+import argparse
+
+# ── Config ───────────────────────────────────────────────────────────────────
+
+CONFIG_PATH = os.path.expanduser("~/.agent-comm/config.sh")
+TIMEOUT = 10       # default HTTP timeout (seconds)
+POLL_TIMEOUT = 65  # max poll wait (slightly above server cap of 60s)
+
+
+class Client:
+    """REST API client for agent-comm."""
+
+    def __init__(self):
+        self.host = os.environ.get("COMM_HOST")
+        self.port = os.environ.get("COMM_PORT")
+        self.user = os.environ.get("COMM_USER")
+        self._load_config()
+        self.base = f"http://{self.host}:{self.port}"
+        self._id_cache: dict[str, str] = {}
+
+    def _load_config(self):
+        """Read ~/.agent-comm/config.sh (env vars take precedence)."""
+        if not os.path.exists(CONFIG_PATH):
+            if not self.host:
+                self.host = "cislo5.lan"
+            if not self.port:
+                self.port = "3420"
+            return
+        try:
+            with open(CONFIG_PATH) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k == "COMM_HOST" and not self.host:
+                        self.host = v
+                    elif k == "COMM_PORT" and not self.port:
+                        self.port = v
+        except OSError:
+            pass
+        if not self.host:
+            self.host = "cislo5.lan"
+        if not self.port:
+            self.port = "3420"
+
+    # ── HTTP ─────────────────────────────────────────────────────────────────
+
+    def _req(self, method: str, path: str, body: dict | None = None,
+             timeout: int = TIMEOUT) -> object | None:
+        """Make an HTTP request, return parsed JSON or None. Exits on error."""
+        url = f"{self.base}{path}"
+        data = json.dumps(body).encode() if body else None
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status == 204:
+                    return None
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            try:
+                err = json.loads(raw)
+                error = err.get("error", raw)
+            except (json.JSONDecodeError, ValueError):
+                error = raw.strip() or str(e)
+            print(f"Error {e.code}: {error}", file=sys.stderr)
+            sys.exit(1)
+        except urllib.error.URLError as e:
+            print(f"Connection failed: {e.reason}", file=sys.stderr)
+            sys.exit(1)
+        except TimeoutError:
+            print("Error: request timed out", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    def _need_user(self):
+        if not self.user:
+            print("Error: COMM_USER not set", file=sys.stderr)
+            sys.exit(1)
+
+    def _resolve(self, name: str) -> str:
+        """Resolve agent name → ID (with caching)."""
+        if name in self._id_cache:
+            return self._id_cache[name]
+        agents = self._req("GET", "/api/agents") or []
+        if isinstance(agents, list):
+            for a in agents:
+                if isinstance(a, dict):
+                    self._id_cache[a.get("name", "")] = a.get("id", "")
+        return self._id_cache.get(name, name)
+
+    def _heartbeat(self):
+        """Auto-heartbeat on read operations. Best-effort, never blocks."""
+        if not self.user:
+            return
+        try:
+            aid = self._resolve(self.user)
+            self._req("PUT", f"/api/agents/{aid}/heartbeat",
+                      {"status_text": "active"}, timeout=3)
+        except SystemExit:
+            pass
+        except Exception:
+            pass
+
+    # ── Commands ─────────────────────────────────────────────────────────────
+
+    def health(self):
+        return self._req("GET", "/health")
+
+    def register(self, caps=None):
+        self._need_user()
+        body: dict = {"name": self.user}
+        if caps:
+            body["capabilities"] = [c.strip() for c in caps.split(",")]
+        return self._req("POST", "/api/agents", body)
+
+    def unregister(self):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("DELETE", f"/api/agents/{aid}")
+
+    def heartbeat(self, status_text=None):
+        self._need_user()
+        aid = self._resolve(self.user)
+        body: dict = {}
+        if status_text:
+            body["status_text"] = status_text
+        return self._req("PUT", f"/api/agents/{aid}/heartbeat", body)
+
+    def agents(self):
+        self._heartbeat()
+        return self._req("GET", "/api/agents")
+
+    def discover(self, skill=None, tag=None):
+        self._heartbeat()
+        params = []
+        if skill:
+            params.append(f"skill={urllib.parse.quote(skill)}")
+        if tag:
+            params.append(f"tag={urllib.parse.quote(tag)}")
+        qs = "&".join(params)
+        path = f"/api/agents/discover?{qs}" if qs else "/api/agents"
+        return self._req("GET", path)
+
+    def send(self, to, content, importance=None):
+        self._need_user()
+        self._heartbeat()
+        body: dict = {"from": self.user, "content": content}
+        if to.startswith("channel:"):
+            body["channel"] = to[8:]
+        else:
+            body["to"] = to
+        if importance:
+            body["importance"] = importance
+        return self._req("POST", "/api/messages", body)
+
+    def broadcast(self, content, importance=None):
+        self._need_user()
+        self._heartbeat()
+        body: dict = {"from": self.user, "content": content}
+        if importance:
+            body["importance"] = importance
+        return self._req("POST", "/api/messages/broadcast", body)
+
+    def inbox(self, unread=False):
+        self._need_user()
+        self._heartbeat()
+        aid = self._resolve(self.user)
+        params = ["limit=50"]
+        if unread:
+            params.append("unread=true")
+        return self._req("GET", f"/api/agents/{aid}/inbox?{'&'.join(params)}")
+
+    def poll(self, timeout=60, all_=False):
+        """Block until new unread message arrives or timeout."""
+        self._need_user()
+        aid = self._resolve(self.user)
+        params = f"timeout={timeout}"
+        if all_:
+            params += "&all=true"
+        return self._req("GET", f"/api/agents/{aid}/poll?{params}",
+                         timeout=timeout + 5)
+
+    def ask(self, to, content, timeout=120):
+        """Send a message and wait for a reply from the target agent.
+
+        1. Send message to target
+        2. Poll inbox in loops until a reply from target arrives or timeout
+        3. Mark the reply as read
+        4. Return the reply
+        """
+        import time
+
+        self._need_user()
+
+        # Send the message
+        sent = self.send(to, content)
+        if not sent:
+            return None
+
+        sent_id = sent.get("id")
+        deadline = time.monotonic() + timeout
+
+        # Poll loop: wait for reply from target
+        aid = self._resolve(self.user)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+
+            poll_sec = min(int(remaining), 55)  # server caps at 60
+            msgs = self.poll(timeout=poll_sec)
+
+            if msgs and isinstance(msgs, list):
+                for msg in msgs:
+                    if (isinstance(msg, dict)
+                            and msg.get("from_agent") == to
+                            and msg.get("id") != sent_id):
+                        # Found a reply — mark read and return it
+                        self.mark_read(msg["id"])
+                        return msg
+
+        return None
+
+    def mark_read(self, msg_id):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("POST", f"/api/messages/{msg_id}/read",
+                         {"agent_id": aid})
+
+    def read_all(self):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("POST", f"/api/agents/{aid}/read-all")
+
+    def channels(self):
+        self._heartbeat()
+        return self._req("GET", "/api/channels")
+
+    def channel(self, name):
+        self._heartbeat()
+        return self._req("GET", f"/api/channels/{urllib.parse.quote(name)}")
+
+    def join(self, name):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("POST", f"/api/channels/{urllib.parse.quote(name)}/join",
+                         {"agent_id": aid})
+
+    def leave(self, name):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("POST", f"/api/channels/{urllib.parse.quote(name)}/leave",
+                         {"agent_id": aid})
+
+    def state_set(self, ns, key, value, ttl=None):
+        self._need_user()
+        self._heartbeat()
+        aid = self._resolve(self.user)
+        body: dict = {"value": value, "updated_by": aid}
+        if ttl:
+            body["ttl_seconds"] = int(ttl)
+        return self._req("POST",
+                         f"/api/state/{urllib.parse.quote(ns)}/{urllib.parse.quote(key)}",
+                         body)
+
+    def state_get(self, ns, key=None):
+        self._heartbeat()
+        if key:
+            return self._req("GET",
+                             f"/api/state/{urllib.parse.quote(ns)}/{urllib.parse.quote(key)}")
+        return self._req("GET",
+                         f"/api/state?namespace={urllib.parse.quote(ns)}")
+
+    def state_delete(self, ns, key):
+        self._need_user()
+        return self._req("DELETE",
+                         f"/api/state/{urllib.parse.quote(ns)}/{urllib.parse.quote(key)}")
+
+    def feed(self, agent=None, type_=None, limit=20):
+        params = [f"limit={limit}"]
+        if agent:
+            params.append(f"agent={urllib.parse.quote(agent)}")
+        if type_:
+            params.append(f"type={urllib.parse.quote(type_)}")
+        return self._req("GET", f"/api/feed?{'&'.join(params)}")
+
+    def stuck(self):
+        return self._req("GET", "/api/stuck")
+
+    def overview(self):
+        return self._req("GET", "/api/overview")
+
+
+# ── Output ───────────────────────────────────────────────────────────────────
+
+def output(data):
+    """Pretty-print JSON to stdout."""
+    if data is not None:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="ac",
+        description="agent-comm CLI client",
+    )
+    sub = p.add_subparsers(dest="cmd")
+
+    sub.add_parser("health", help="Server health check")
+
+    reg = sub.add_parser("register", help="Register this agent")
+    reg.add_argument("--caps", help="Comma-separated capabilities")
+
+    sub.add_parser("unregister", help="Unregister this agent")
+
+    hb = sub.add_parser("heartbeat", help="Send heartbeat")
+    hb.add_argument("--status", help="Status text")
+
+    sub.add_parser("agents", help="List all agents")
+
+    disc = sub.add_parser("discover", help="Discover agents by skill/tag")
+    disc.add_argument("--skill", help="Filter by skill")
+    disc.add_argument("--tag", help="Filter by tag")
+
+    snd = sub.add_parser("send", help="Send a message")
+    snd.add_argument("to", help="Recipient name/ID or channel:NAME")
+    snd.add_argument("content", help="Message content")
+    snd.add_argument("--importance", choices=["low", "normal", "high", "urgent"])
+
+    bc = sub.add_parser("broadcast", help="Broadcast to all online agents")
+    bc.add_argument("content", help="Message content")
+    bc.add_argument("--importance", choices=["low", "normal", "high", "urgent"])
+
+    ib = sub.add_parser("inbox", help="Check inbox (direct + channel)")
+    ib.add_argument("--unread", action="store_true", help="Unread only")
+
+    po = sub.add_parser("poll", help="Block until new unread message arrives")
+    po.add_argument("--timeout", type=int, default=60,
+                    help="Max wait seconds (default 60, server caps at 60)")
+    po.add_argument("--all", action="store_true",
+                    help="Include already-read messages")
+
+    ask = sub.add_parser("ask", help="Send message and wait for reply")
+    ask.add_argument("to", help="Recipient agent name/ID")
+    ask.add_argument("content", help="Message content")
+    ask.add_argument("--timeout", type=int, default=120,
+                     help="Max wait for reply in seconds (default 120)")
+
+    mr = sub.add_parser("mark-read", help="Mark message as read")
+    mr.add_argument("msg_id", type=int, help="Message ID")
+
+    sub.add_parser("read-all", help="Mark all inbox messages as read")
+
+    sub.add_parser("channels", help="List channels")
+
+    ch = sub.add_parser("channel", help="Show channel details")
+    ch.add_argument("name")
+
+    jo = sub.add_parser("join", help="Join a channel")
+    jo.add_argument("channel")
+
+    le = sub.add_parser("leave", help="Leave a channel")
+    le.add_argument("channel")
+
+    st = sub.add_parser("state", help="State operations")
+    st_sub = st.add_subparsers(dest="state_cmd")
+    st_set = st_sub.add_parser("set", help="Set a state value")
+    st_set.add_argument("namespace")
+    st_set.add_argument("key")
+    st_set.add_argument("value")
+    st_set.add_argument("--ttl", type=int, help="TTL in seconds")
+    st_get = st_sub.add_parser("get", help="Get state value(s)")
+    st_get.add_argument("namespace")
+    st_get.add_argument("key", nargs="?", default=None)
+    st_del = st_sub.add_parser("delete", help="Delete a state value")
+    st_del.add_argument("namespace")
+    st_del.add_argument("key")
+
+    fd = sub.add_parser("feed", help="Activity feed")
+    fd.add_argument("--agent")
+    fd.add_argument("--type")
+    fd.add_argument("--limit", type=int, default=20)
+
+    sub.add_parser("stuck", help="Show stuck agents")
+
+    sub.add_parser("overview", help="Full system overview")
+
+    args = p.parse_args()
+    if not args.cmd:
+        p.print_help()
+        sys.exit(1)
+
+    c = Client()
+    cmd = args.cmd
+
+    if cmd == "health":
+        output(c.health())
+    elif cmd == "register":
+        output(c.register(args.caps))
+    elif cmd == "unregister":
+        output(c.unregister())
+    elif cmd == "heartbeat":
+        output(c.heartbeat(args.status))
+    elif cmd == "agents":
+        output(c.agents())
+    elif cmd == "discover":
+        output(c.discover(args.skill, args.tag))
+    elif cmd == "send":
+        output(c.send(args.to, args.content, args.importance))
+    elif cmd == "broadcast":
+        output(c.broadcast(args.content, args.importance))
+    elif cmd == "inbox":
+        output(c.inbox(args.unread))
+    elif cmd == "poll":
+        output(c.poll(args.timeout, args.all))
+    elif cmd == "ask":
+        result = c.ask(args.to, args.content, args.timeout)
+        if result:
+            output(result)
+        else:
+            print("No reply received (timeout)", file=sys.stderr)
+            sys.exit(1)
+    elif cmd == "mark-read":
+        output(c.mark_read(args.msg_id))
+    elif cmd == "read-all":
+        output(c.read_all())
+    elif cmd == "channels":
+        output(c.channels())
+    elif cmd == "channel":
+        output(c.channel(args.name))
+    elif cmd == "join":
+        output(c.join(args.channel))
+    elif cmd == "leave":
+        output(c.leave(args.channel))
+    elif cmd == "state":
+        if args.state_cmd == "set":
+            output(c.state_set(args.namespace, args.key, args.value, args.ttl))
+        elif args.state_cmd == "get":
+            output(c.state_get(args.namespace, args.key))
+        elif args.state_cmd == "delete":
+            output(c.state_delete(args.namespace, args.key))
+        else:
+            st.print_help()
+            sys.exit(1)
+    elif cmd == "feed":
+        output(c.feed(args.agent, args.type, args.limit))
+    elif cmd == "stuck":
+        output(c.stuck())
+    elif cmd == "overview":
+        output(c.overview())
+
+
+if __name__ == "__main__":
+    main()
