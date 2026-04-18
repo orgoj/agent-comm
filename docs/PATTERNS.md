@@ -102,36 +102,57 @@ COMM_USER=manager ac state set tasks auth-module "approved"
 
 ## 4. Consensus
 
-Multiple agents discuss and agree on the best solution.
+Multiple agents discuss on a channel until they agree on the best solution.
+This is a multi-turn conversation, not a simple vote.
 
-**Example: Architectural decision — 3 agents vote on an approach.**
+**Example: 3 agents discuss auth architecture on a channel.**
 
 ```bash
-# Manager creates a discussion channel and broadcasts a proposal
-COMM_USER=manager ac create-channel arch-decision-auth --desc "Auth architecture"
+# Manager sets up the discussion
+COMM_USER=manager ac create-channel arch-decision-auth --desc "Auth architecture discussion"
 COMM_USER=manager ac join arch-decision-auth
 COMM_USER=manager ac send channel:arch-decision-auth \
-  "Proposal: Use JWT with RS256 for auth. Please reply with APPROVE or REJECT and reasoning."
+  "We need to decide on auth. Current options: (A) JWT RS256, (B) Session+OAuth2, (C) Paseto. Discuss."
 
-# Each agent joins and replies
+# Architect joins and proposes
 COMM_USER=architect ac --auto-register join arch-decision-auth
 COMM_USER=architect ac send channel:arch-decision-auth \
-  "APPROVE. RS256 is better than HS256 for multi-service setups."
+  "I prefer (A) JWT RS256 — works well with microservices and our API gateway."
 
-COMM_USER=devops ac --auto-register join arch-decision-auth
-COMM_USER=devops ac send channel:arch-decision-auth \
-  "APPROVE. JWT works well with our API gateway."
-
+# Security agent sees the proposal and pushes back
 COMM_USER=security ac --auto-register join arch-decision-auth
 COMM_USER=security ac send channel:arch-decision-auth \
-  "REJECT. Prefer session-based auth + OAuth2. JWT tokens can't be revoked easily."
+  "JWT can't be revoked. If a token leaks, it's valid until expiry. I'd go with (B) Session+OAuth2."
 
-# Manager waits for N replies (consensus helper)
-COMM_USER=manager ac wait-replies --count 3 --timeout 120
-# Returns list of 3 replies from distinct agents
+# Architect responds to the concern
+COMM_USER=architect ac send channel:arch-decision-auth \
+  "Good point. We could use short-lived tokens (5min) + refresh token rotation. That limits the window."
 
-# Manager can also read full channel history
+# Devops chimes in
+COMM_USER=devops ac --auto-register join arch-decision-auth
+COMM_USER=devops ac send channel:arch-decision-auth \
+  "Short JWT + refresh works for us. API gateway already supports it. I'm fine with (A) with the short TTL."
+
+# Security accepts the compromise
+COMM_USER=security ac send channel:arch-decision-auth \
+  "OK, 5min TTL + refresh rotation addresses my concern. (A) approved with that condition."
+
+# Manager reads the full discussion and decides
 COMM_USER=manager ac channel arch-decision-auth
+# → Sees the full thread, concludes: JWT RS256 with 5min TTL + refresh rotation.
+```
+
+**Key insight:** Consensus is just agents chatting on a channel. They see each other's
+messages, react, counter-argue, and converge. No special voting mechanism needed —
+it's natural multi-turn dialogue.
+
+### If you just need quick votes
+
+For simple "approve/reject" from multiple agents without discussion, use `wait-replies`:
+
+```bash
+COMM_USER=manager ac broadcast "Approve deploy to prod? Reply YES or NO."
+COMM_USER=manager ac wait-replies --count 3 --timeout 60
 ```
 
 ---
@@ -167,13 +188,13 @@ COMM_USER=new-agent ac state get knowledge
 
 ## Quick Reference
 
-| Pattern        | Key Commands                                                     |
-| -------------- | ---------------------------------------------------------------- |
-| Human-Agent    | `ac ask`, `ac send`, `ac inbox`                                  |
-| Agent-Agent    | `ac ask`, `ac poll`                                              |
-| Manager-Worker | `ac send`, `ac poll`, `ac state set`                             |
-| Consensus      | `ac broadcast`, `ac send channel:X`, `ac wait-replies --count N` |
-| Experience     | `ac send channel:learnings`, `ac state set/get`                  |
+| Pattern        | Key Commands                                              |
+| -------------- | --------------------------------------------------------- |
+| Human-Agent    | `ac ask`, `ac send`, `ac inbox`                           |
+| Agent-Agent    | `ac ask`, `ac poll`                                       |
+| Manager-Worker | `ac send`, `ac poll`, `ac state set`                      |
+| Consensus      | `ac send channel:X`, agents discuss multi-turn on channel |
+| Experience     | `ac send channel:learnings`, `ac state set/get`           |
 
 ### Useful Flags
 
