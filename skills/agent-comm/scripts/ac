@@ -21,7 +21,7 @@ import argparse
 
 CONFIG_PATH = os.path.expanduser("~/.agent-comm/config.sh")
 TIMEOUT = 10       # default HTTP timeout (seconds)
-POLL_TIMEOUT = 65  # max poll wait (slightly above server cap of 60s)
+POLL_TIMEOUT = 3605  # max poll wait — loops in 55s chunks, up to 1h
 
 
 class Client:
@@ -97,6 +97,23 @@ class Client:
         except Exception as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
+
+    def _poll_req(self, path: str, timeout: int) -> object | None:
+        """Like _req but returns None on timeout instead of exiting.
+        Used by poll loops that need to survive individual chunk timeouts."""
+        url = f"{self.base}{path}"
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                if resp.status == 204:
+                    return None
+                raw = resp.read().decode()
+                return json.loads(raw) if raw else None
+        except (TimeoutError, urllib.error.URLError):
+            return None
+        except Exception:
+            return None
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -224,16 +241,30 @@ class Client:
 
     def poll(self, timeout=60, all_=False):
         """Block until new unread message arrives or timeout.
+        Loops in 55s server-poll chunks because backend caps at 60s.
         Auto-marks returned messages as read."""
+        import time
+
         self._need_user()
         aid = self._resolve(self.user)
-        params = f"timeout={timeout}"
-        if all_:
-            params += "&all=true"
-        msgs = self._req("GET", f"/api/agents/{aid}/poll?{params}",
-                         timeout=timeout + 5)
-        self._mark_read_msgs(msgs)
-        return msgs
+        deadline = time.monotonic() + timeout
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                print("Error: poll timeout expired with no messages", file=sys.stderr)
+                sys.exit(1)
+
+            poll_sec = min(int(remaining), 55)
+            params = f"timeout={poll_sec}"
+            if all_:
+                params += "&all=true"
+            msgs = self._poll_req(f"/api/agents/{aid}/poll?{params}",
+                                  timeout=poll_sec + 5)
+            if msgs and isinstance(msgs, list) and len(msgs) > 0:
+                self._mark_read_msgs(msgs)
+                return msgs
+            # No messages in this chunk — loop again if time remains
 
     def ask(self, to, content, timeout=120):
         """Send a message and wait for a reply from the target agent.
@@ -415,7 +446,7 @@ class Client:
                 break
 
             poll_sec = min(int(remaining), 55)
-            msgs = self._req("GET",
+            msgs = self._poll_req(
                              f"/api/agents/{aid}/poll?timeout={poll_sec}",
                              timeout=poll_sec + 5)
 
@@ -486,7 +517,7 @@ def main():
 
     po = sub.add_parser("poll", help="Block until new unread message arrives")
     po.add_argument("--timeout", type=int, default=60,
-                    help="Max wait seconds (default 60, server caps at 60)")
+                    help="Max wait seconds (default 60, no hard cap)")
     po.add_argument("--all", action="store_true",
                     help="Include already-read messages")
 
