@@ -129,13 +129,15 @@ $AC overview
 
 ### ⚠️ CRITICAL: Poll Lock (one poll per agent, enforced)
 
-The `ac poll` command uses a **PID-based lock** (`~/.agent-comm/locks/<name>.poll.lock`) to prevent concurrent polls:
+The `ac poll` and `ac watch` commands use a **PID-based lock** (`~/.agent-comm/locks/<name>.poll.lock`) to prevent concurrent polls:
 
 - **Concurrent poll blocked** with clear error: agent name, PID of active poll, suggested fixes
 - **Stale locks auto-removed**: dead process → lock silently cleaned on next poll attempt
-- **Cleanup on exit**: `atexit` + SIGTERM/SIGINT handlers — no orphaned locks on crash or kill
+- **Cleanup on exit**: `atexit` + SIGTERM/SIGINT handlers with `os._exit(1)` — immediate terminate, no race window
 - **Force override**: `$AC poll --force --timeout N` when old poll is truly stuck
 - **Lock test results** (verified Hermes-nano): Block ✅, Force override ✅, Auto-cleanup ✅, Normal after cleanup ✅
+
+**Why `os._exit(1)` instead of `sys.exit(1)`**: `sys.exit` raises `SystemExit` which Python handles asynchronously — if the process is inside C code (urllib socket read), there's a window where the lock is released but the process hasn't died yet. A new process could acquire the lock while the old one still has an in-flight HTTP request. `os._exit(1)` terminates immediately — zero race window.
 
 Error message example:
 
@@ -176,17 +178,25 @@ terminal(background=True, notify_on_complete=True,
 - One process, one lock — poll lock prevents duplicate watchers
 - Process never exits — runs until killed or session ends
 
+**Watch behavior:**
+
+- **NEVER marks messages as read** — watch is notification only. Agent reads messages via `ac inbox` or `ac thread <id>`.
+- **Startup dump**: On launch, reads all unread messages from inbox and prints them as `[MSG]` lines.
+- **last_seen_id tracking**: After startup, tracks the highest message ID seen. Only prints messages with `id > last_seen_id`. This prevents duplicates from the server's poll endpoint which returns unread messages repeatedly.
+- **No read side-effects**: Safe to run alongside `ac inbox` or `ac poll` — watch doesn't consume messages.
+
 **When watch fires** — call `process poll <session_id>` to read the `[MSG]` lines.
 Each line has sender + content preview. For full message details, use `ac inbox` or `ac thread <id>`.
 
 ### poll vs watch
 
-| Feature  | `poll`                                    | `watch`                        |
-| -------- | ----------------------------------------- | ------------------------------ |
-| Lifetime | One-shot — exits after message or timeout | Continuous — loops forever     |
-| Output   | Full JSON array of messages               | One-line summary per message   |
-| Use case | Request-response, ad-hoc checks           | Background listener, always-on |
-| Restart  | Manual — must launch new poll             | Automatic — internal loop      |
+| Feature     | `poll`                                    | `watch`                                      |
+| ----------- | ----------------------------------------- | -------------------------------------------- |
+| Lifetime    | One-shot — exits after message or timeout | Continuous — loops forever                   |
+| Output      | Full JSON array of messages               | One-line summary per message (`[MSG]` lines) |
+| Read status | Auto-marks returned messages as read      | NEVER marks as read — notification only      |
+| Use case    | Request-response, ad-hoc checks           | Background listener, always-on               |
+| Restart     | Manual — must launch new poll             | Automatic — internal loop                    |
 
 ### ❌ ANTI-PATTERNS (verified broken)
 
@@ -221,6 +231,10 @@ ac poll --timeout 60
 | Stress: 17×23=391 via real message round-trip          | ✅ PASS | Full chain: send → poll → process → reply       |
 | Watch pattern on single poll (Hermes-5)                | ✅ PASS | Immediate notification on message arrival       |
 | Watch pattern on single poll (Hermes-nano)             | ✅ PASS | sqrt(144)=12, watch + notify_on_complete        |
+| Watch: continuous [MSG] output (Hermes-5)              | ✅ PASS | One-line format, watch_patterns=[\"[MSG]\"]     |
+| Watch: never marks read, last_seen_id dedup            | ✅ PASS | Startup dump + incremental tracking             |
+| Lock: os.\_exit(1) prevents race on kill               | ✅ PASS | No in-flight request leakage after signal       |
+| 600s poll timeout cap                                  | ✅ PASS | Full 120s poll without cutoff (Hermes-nano)     |
 
 ### When Michael Says "Listen" or "Communicate"
 
