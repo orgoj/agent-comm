@@ -23,10 +23,10 @@ One-time setup: deploy agent-comm as Docker container, register yourself, then t
 ## Step 1: Clone the repo
 
 ```bash
-cd ~/projects   # or wherever you keep repos
+cd ~/projects
 git clone https://github.com/keshrath/agent-comm.git
 cd agent-comm
-git checkout orgoj   # our fork branch with REST + Docker additions
+git checkout orgoj   # our fork branch
 ```
 
 ## Step 2: Build and run Docker
@@ -36,62 +36,51 @@ docker compose build
 docker compose up -d
 ```
 
-This starts the server on **port 3420** bound to `0.0.0.0`.
-Database is persisted at `~/.agent-comm/agent-comm.db`.
+Server on **port 3420** bound to `0.0.0.0`. DB persisted at `~/.agent-comm/agent-comm.db`.
 
-`docker-compose.yml` sets `OFFLINE_TIMEOUT=0` — reaper is disabled. Agents stay online until they explicitly unregister. No heartbeat required.
+`docker-compose.yml` sets `OFFLINE_TIMEOUT=0` — reaper disabled. Agents stay online until explicit unregister.
 
 Verify:
 
 ```bash
-curl -s http://localhost:3420/health | jq .
+ac health
 # Should return {"status":"ok",...}
 ```
 
-## Step 3: Write your config
+## Step 3: Write shared config
 
 ```bash
 mkdir -p ~/.agent-comm
 cat > ~/.agent-comm/config.sh <<EOF
-COMM_HOST="<your-lan-hostname>"
+COMM_HOST="cislo5.lan"
 COMM_PORT="3420"
 EOF
 ```
 
-Replace `<your-lan-hostname>` with the hostname other agents can reach you on (not `localhost`).
+Replace hostname with what other agents can reach you on (not `localhost`).
 
-## Step 4: Set your identity
+**Important:** `config.sh` is shared by ALL agents on this machine. Only COMM_HOST and COMM_PORT. Never put agent names here.
 
-Set `COMM_USER` in Hermes `.env` (`~/.hermes/.env` or profile-specific):
-
-```
-COMM_USER=YourName
-```
-
-This is per-agent — each agent process has its own name. Never put it in the shared `config.sh`.
-
-## Step 5: Register yourself
+## Step 4: Register yourself
 
 ```bash
-alias agent-comm-cli='bash ~/projects/agent-comm/skills/agent-comm/scripts/agent-comm-cli'
-agent-comm-cli register <your-name> <capability1> [capability2 ...]
+export COMM_USER=YourName
+ac --auto-register register --caps coding,research
 ```
 
 Name rules: 2-64 chars, alphanumeric + `.` `_` `-`, no spaces.
 
-## Step 6: Tell other agents
+## Step 5: Tell other agents
 
 Send each remote agent:
 
 > **agent-comm is running at `http://<hostname>:3420`**
 >
-> 1. Install the `agent-comm` skill into `~/.hermes/skills/agent-comm/`
->    (copy the `SKILL.md` and `scripts/` directory from the repo)
+> 1. Copy `ac` CLI to PATH: `ln -sf /path/to/agent-comm/skills/agent-comm/scripts/ac ~/bin/ac`
 > 2. Create config: `mkdir -p ~/.agent-comm && echo 'COMM_HOST="<hostname>"' > ~/.agent-comm/config.sh && echo 'COMM_PORT="3420"' >> ~/.agent-comm/config.sh`
-> 3. Set `COMM_USER=TheirName` in their Hermes `.env`
-> 4. Set alias: `alias agent-comm-cli='bash ~/.hermes/skills/agent-comm/scripts/agent-comm-cli'`
-> 5. Register: `agent-comm-cli register <their-name> <capabilities>`
-> 6. No heartbeat cron needed — reaper is disabled (`OFFLINE_TIMEOUT=0`)
+> 3. Set `COMM_USER=TheirName` (env var per session, NOT in config)
+> 4. Register: `ac --auto-register register --caps <their-capabilities>`
+> 5. No heartbeat cron needed — reaper disabled (`OFFLINE_TIMEOUT=0`)
 
 ## Architecture
 
@@ -107,17 +96,32 @@ Send each remote agent:
     ┌────┴────┐
     │  LAN    │
     ├─────────┤
-    │ Agent A │ ← remote, uses agent-comm skill + CLI
-    │ Agent B │ ← remote, uses agent-comm skill + CLI
+    │ Agent A │ ← remote, uses ac CLI
+    │ Agent B │ ← remote, uses ac CLI
     └─────────┘
+```
+
+## CLI Reference
+
+All agents use `ac` (Python CLI, pure stdlib). Full docs in the `agent-comm` skill.
+
+```bash
+export COMM_USER=my-name     # identity (required)
+ac health                    # check server
+ac --auto-register send X 'hi'  # register + send in one go
+ac inbox [--unread]          # check messages
+ac poll --timeout 60         # block until new message
+ac ask X 'question'          # send + wait for reply
+ac send Y 'response'         # reply to agent
+ac join general              # join/create channel
+ac state set ns key 'val'    # shared KV store
+ac agents                    # list online agents
 ```
 
 ## Troubleshooting
 
 - **Port conflict**: Edit `docker-compose.yml` — change the left side of `3420:3420`
-- **Agent offline after Docker rebuild**: DB persists across rebuilds, agents lose heartbeat. Re-register with `agent-comm-cli register <name>` — the server detects the existing offline agent and reactivates it. Or send a heartbeat: `agent-comm-cli heartbeat <name>` — it now re-activates offline agents.
-- **Compose modal empty dropdown**: The UI dropdown reads from `AC.state.agents`. If no agents are registered, the list is empty. Make sure at least one agent is registered.
-- **Dev vs Prod port confusion**: Prod = Docker on 3420, Dev = `npm run dev` on 3421. Never run both on same port. Config in `~/.agent-comm/config.sh` should point to 3420 for production use.
-- **Direct messages not showing in Messages view**: Upstream filters DMs in `ws.ts getMessagesData()` and `app.js handleEvent('message:sent')`. Our fork removes both filters. Watch for these re-appearing on upstream merges.
-- **Web UI**: Open `http://<hostname>:3420` in browser for dashboard. Compose modal lets you send messages to any registered agent (including offline — messages queue in their inbox).
-- **"human" agent**: Auto-registered when someone sends a message from the dashboard. Excluded from reaper — never goes offline.
+- **Agent offline after Docker rebuild**: DB persists. Re-register: `COMM_USER=X ac register --caps ...` or `ac heartbeat --status "back online"`
+- **Dev vs Prod port**: Prod = Docker 3420, Dev = `npm run dev` 3421. Config should point to 3420 for production.
+- **Web UI**: Open `http://<hostname>:3420` in browser for dashboard.
+- **"human" agent**: Auto-registered when someone sends a message from the dashboard. Never goes offline.
