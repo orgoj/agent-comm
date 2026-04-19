@@ -336,7 +336,9 @@ class Client:
     def watch(self, timeout=300, all_=False, force=False):
         """Continuous message listener. Loops forever, prints one line per message.
         Format: [MSG] id=N from=Agent [channel=Ch]: first line of content
-        Flushes stdout immediately so watch_patterns catches each line.
+        NEVER marks messages as read — watch is notification only.
+        On startup, dumps all unread messages. Then tracks last_seen_id
+        to only show new messages.
         Protected by PID-based lock — one watch per agent."""
         import time
 
@@ -361,6 +363,30 @@ class Client:
             for a in agents_raw:
                 name_map[a.get("id", "")] = a.get("name", a.get("id", ""))
 
+        def _print_msg(m):
+            mid = m.get("id", "?")
+            from_id = m.get("from_agent", "")
+            from_name = name_map.get(from_id, from_id[:8]) if from_id else "?"
+            ch = m.get("channel_id") or m.get("channel_name")
+            content = (m.get("content") or "").replace("\n", " ")[:120]
+            parts = [f"[MSG] id={mid} from={from_name}"]
+            if ch:
+                parts.append(f"channel={ch}")
+            line = " ".join(parts) + f": {content}"
+            sys.stdout.write(line + "\n")
+            sys.stdout.flush()
+            return mid
+
+        # On startup: dump all unread messages
+        last_seen_id = 0
+        inbox_params = f"unread=true&limit=100"
+        existing = self._req("GET", f"/api/agents/{aid}/inbox?{inbox_params}")
+        if existing and isinstance(existing, list):
+            for m in existing:
+                mid = _print_msg(m)
+                last_seen_id = max(last_seen_id, mid)
+
+        # Continuous loop: poll for new messages, filter by last_seen_id
         while True:
             poll_sec = min(timeout, 55)
             params = f"timeout={poll_sec}"
@@ -368,20 +394,12 @@ class Client:
                 params += "&all=true"
             msgs = self._poll_req(f"/api/agents/{aid}/poll?{params}",
                                   timeout=poll_sec + 5)
-            if msgs and isinstance(msgs, list) and len(msgs) > 0:
-                self._mark_read_msgs(msgs)
+            if msgs and isinstance(msgs, list):
                 for m in msgs:
-                    mid = m.get("id", "?")
-                    from_id = m.get("from_agent", "")
-                    from_name = name_map.get(from_id, from_id[:8]) if from_id else "?"
-                    ch = m.get("channel_id") or m.get("channel_name")
-                    content = (m.get("content") or "").replace("\n", " ")[:120]
-                    parts = [f"[MSG] id={mid} from={from_name}"]
-                    if ch:
-                        parts.append(f"channel={ch}")
-                    line = " ".join(parts) + f": {content}"
-                    sys.stdout.write(line + "\n")
-                    sys.stdout.flush()
+                    mid = m.get("id", 0)
+                    if mid > last_seen_id:
+                        _print_msg(m)
+                        last_seen_id = mid
 
     def ask(self, to, content, timeout=120):
         """Send a message and wait for a reply from the target agent.
