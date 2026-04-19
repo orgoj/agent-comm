@@ -29,6 +29,13 @@ $AC --help
 
 No ~/bin symlink needed. The skill symlink `~/.hermes/skills/agent-comm → ~/projects/agent-comm/skills/agent-comm` provides access.
 
+**Deploying to remote agents** (e.g. nanobotnb.lan): `scp` both files:
+
+```bash
+scp ~/.hermes/skills/agent-comm/scripts/ac nanobotnb.lan:~/.hermes/skills/agent-comm/scripts/ac
+scp ~/.hermes/skills/agent-comm/SKILL.md nanobotnb.lan:~/.hermes/skills/agent-comm/SKILL.md
+```
+
 ## Setup
 
 ```bash
@@ -111,7 +118,7 @@ $AC overview
 - **Auto-heartbeat**: Read commands (agents, inbox, discover) auto-send heartbeat.
 - **Auto-mark read**: `$AC poll`, `$AC inbox`, `$AC thread` automatically mark returned messages as read. Next poll won't return them again.
 - **Poll loop**: Backend caps at 60s. The CLI loops in 55s chunks internally, so `--timeout 3600` waits up to 1h without backend changes. No hard upper limit.
-- **Poll timeout expiry**: Returns stderr `"Error: poll timeout expired with no messages"` + exit code 1. Agent knows it waited and nothing came — not silent `[]`.
+- **Poll timeout expiry**: Returns stderr `"Error: poll timed out after Ns with no messages.\n  This is normal — start a new poll to keep waiting."` + exit code 1. Agent knows it waited and nothing came — not silent `[]`.
 - **JSON-safe**: All content properly encoded. Quotes, backslashes, newlines safe.
 - **Config**: `~/.agent-comm/config.sh` = COMM_HOST + COMM_PORT only. Never put agent names there.
 - **Identity**: `COMM_USER` env var = agent name. Multiple agents = different COMM_USER.
@@ -119,9 +126,23 @@ $AC overview
 - **Ask (send+wait)**: Checks target is online, sends message, polls until target replies or timeout. Fails immediately if target is offline or not registered.
 - **Auto-register**: `$AC --auto-register <cmd>` registers before first command. Idempotent.
 
-### ⚠️ CRITICAL: Never Run Concurrent Polls
+### ⚠️ CRITICAL: Poll Lock (one poll per agent, enforced)
 
-Two simultaneous `$AC poll` calls for the same agent will RACE on auto-mark-read. One poll marks messages as read, the other finds nothing and times out. **One poll at a time per agent.**
+The `ac poll` command uses a **PID-based lock** (`~/.agent-comm/locks/<name>.poll.lock`) to prevent concurrent polls:
+
+- **Concurrent poll blocked** with clear error: agent name, PID of active poll, suggested fixes
+- **Stale locks auto-removed**: dead process → lock silently cleaned on next poll attempt
+- **Cleanup on exit**: `atexit` + SIGTERM/SIGINT handlers — no orphaned locks on crash or kill
+- **Force override**: `$AC poll --force --timeout N` when old poll is truly stuck
+- **Lock test results** (verified Hermes-nano): Block ✅, Force override ✅, Auto-cleanup ✅, Normal after cleanup ✅
+
+Error message example:
+
+```
+Error: agent Hermes-nano already has an active poll (PID 869507).
+  Fix: wait for the current poll to finish, or kill it with 'kill 869507',
+  or use: ac poll --force --timeout N
+```
 
 ### Background Poll Pattern (for Hermes agents)
 
@@ -183,6 +204,10 @@ ac poll --timeout 120
 | Timeout recovery (poll → timeout → new poll → message) | ✅ PASS | After killing stale while-loop process          |
 | Burst 3 messages in one poll                           | ✅ PASS | All 3 delivered in single batch                 |
 | Concurrent polls (while-loop + manual poll)            | ❌ FAIL | Race condition, messages lost to auto-mark-read |
+| Poll lock: block second poll                           | ✅ PASS | Clear error + fix suggestion                    |
+| Poll lock: --force override                            | ✅ PASS | Takes over cleanly                              |
+| Poll lock: auto-cleanup on process death               | ✅ PASS | atexit + signal handlers                        |
+| Stress: 17×23=391 via real message round-trip          | ✅ PASS | Full chain: send → poll → process → reply       |
 
 ### When Michael Says "Listen" or "Communicate"
 
