@@ -100,17 +100,17 @@ class Client:
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
-    def _need_user(self):
+    def _need_user(self, _skip_auto_register=False):
         if not self.user:
             print("Error: COMM_USER not set", file=sys.stderr)
             sys.exit(1)
-        if self.auto_register:
+        if self.auto_register and not _skip_auto_register:
+            self.auto_register = False  # Guard before recursive call
             # Try register — if already exists, server returns existing agent
             try:
                 self.register()
             except SystemExit:
                 pass  # Already registered or other non-fatal error
-            self.auto_register = False  # Only try once
 
     def _resolve(self, name: str) -> str:
         """Resolve agent name → ID (with caching)."""
