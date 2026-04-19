@@ -304,7 +304,7 @@ class Client:
         # Cleanup on exit (normal or signal)
         def _cleanup(*_args):
             _lock_release(self.user)
-            sys.exit(1)
+            os._exit(1)
         signal.signal(signal.SIGTERM, _cleanup)
         signal.signal(signal.SIGINT, _cleanup)
         import atexit
@@ -348,7 +348,7 @@ class Client:
 
         def _cleanup(*_args):
             _lock_release(self.user)
-            sys.exit(1)
+            os._exit(1)
         signal.signal(signal.SIGTERM, _cleanup)
         signal.signal(signal.SIGINT, _cleanup)
         import atexit
