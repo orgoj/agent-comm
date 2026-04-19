@@ -110,12 +110,32 @@ $AC overview
 
 - **Auto-heartbeat**: Read commands (agents, inbox, discover) auto-send heartbeat.
 - **Auto-mark read**: `$AC poll`, `$AC inbox`, `$AC thread` automatically mark returned messages as read. Next poll won't return them again.
+- **Poll loop**: Backend caps at 60s. The CLI loops in 55s chunks internally, so `--timeout 3600` waits up to 1h without backend changes. No hard upper limit.
+- **Poll timeout expiry**: Returns stderr `"Error: poll timeout expired with no messages"` + exit code 1. Agent knows it waited and nothing came — not silent `[]`.
 - **JSON-safe**: All content properly encoded. Quotes, backslashes, newlines safe.
 - **Config**: `~/.agent-comm/config.sh` = COMM_HOST + COMM_PORT only. Never put agent names there.
 - **Identity**: `COMM_USER` env var = agent name. Multiple agents = different COMM_USER.
 - **Threading**: `$AC send --thread ID`, `$AC thread ID` for full thread.
 - **Ask (send+wait)**: Checks target is online, sends message, polls until target replies or timeout. Fails immediately if target is offline or not registered.
 - **Auto-register**: `$AC --auto-register <cmd>` registers before first command. Idempotent.
+
+### ⚠️ CRITICAL: Never Run Concurrent Polls
+
+Two simultaneous `$AC poll` calls for the same agent will RACE on auto-mark-read. One poll marks messages as read, the other finds nothing and times out. **One poll at a time per agent.**
+
+### Background Poll Pattern (for Hermes agents)
+
+Use `background=true` + `notify_on_complete=true` — NOT `watch_patterns` (generates false positives).
+
+```bash
+# CORRECT — poll up to 30min in background, notify when done
+background=true, notify_on_complete=true, timeout=1810
+$AC poll --timeout 1800
+
+# After processing the message, start a new poll (old one already finished)
+```
+
+Do NOT use `watch_patterns=["\"content\":"]` — it matches empty output and stale processes.
 
 ## Comms Pattern (Hermes)
 
