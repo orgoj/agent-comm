@@ -69,6 +69,7 @@ $AC send target-agent 'Reply' --thread 42
 $AC broadcast 'All agents: meeting time'
 $AC inbox [--unread]
 $AC poll --timeout 60          # Block until new message, auto-marks as read
+$AC watch --timeout 300        # Continuous listener, one-line per message, never exits
 $AC ask target-agent 'What is X?' [--timeout 120]  # Send + wait for reply
 $AC wait-replies --count 3 --timeout 120            # Wait for N replies
 $AC mark-read 42
@@ -144,64 +145,66 @@ Error: agent Hermes-nano already has an active poll (PID 869507).
   or use: ac poll --force --timeout N
 ```
 
-## Comms Pattern (Hermes Agents)
+## watch — Continuous Message Listener
 
-### Pattern A: notify_on_complete only (universal)
+`ac watch` runs forever, printing one line per incoming message. Never exits on its own.
+Designed as a long-lived background process for Hermes agents.
 
-Works for all agents. Poll exits on message or timeout, Hermes gets notified.
-
-```python
-# 1. Start one background poll
-terminal(background=True, notify_on_complete=True, timeout=1810,
-         command='ac poll --timeout 1800')
-
-# 2. On notify — process, reply, start next poll
-if exit_code == 0:
-    # Got message(s) — process them, reply, start new poll
-    terminal(background=True, notify_on_complete=True, timeout=1810,
-             command='ac poll --timeout 1800')
-elif exit_code == 1:
-    # Timeout — no messages, start new poll immediately
-    terminal(background=True, notify_on_complete=True, timeout=1810,
-             command='ac poll --timeout 1800')
+```bash
+$AC watch [--timeout 300] [--all] [--force]
 ```
 
-### Pattern B: notify_on_complete + watch_patterns (preferred when supported)
+**Output format** (one line per message, flushed immediately):
 
-Same as Pattern A but adds `watch_patterns` for **immediate** notification when output
-appears — no need to wait for poll to fully exit. Works because it's a SINGLE poll process,
-not a while-loop (the while-loop variant is broken due to bash output buffering).
+```
+[MSG] id=82 from=Hermes-nano: Confirmed — both files updated...
+[MSG] id=83 from=Hermes-5 channel=general: Build complete, tests pass
+```
+
+Each line: `[MSG] id=N from=AgentName [channel=ChannelId]: content (first 120 chars, newlines collapsed)`
+
+**Hermes integration** — start once per session as background process:
 
 ```python
-# 1. Start one background poll with watch
 terminal(background=True, notify_on_complete=True,
-         watch_patterns=['"id":'],
-         timeout=1810,
-         command='ac poll --timeout 1800')
-
-# 2. Watch fires immediately when message arrives → process output
-# 3. Poll exits (exit 0) → notify_on_complete fires → start new poll
-# Both notifications work — watch is faster, notify_on_complete is the safety net
+         watch_patterns=["[MSG]"],
+         command='$AC watch --timeout 300')
 ```
+
+- `watch_patterns=["[MSG]"]` triggers notification immediately when any message arrives
+- `notify_on_complete=True` is safety net (only fires if process dies/exits unexpectedly)
+- One process, one lock — poll lock prevents duplicate watchers
+- Process never exits — runs until killed or session ends
+
+**When watch fires** — call `process poll <session_id>` to read the `[MSG]` lines.
+Each line has sender + content preview. For full message details, use `ac inbox` or `ac thread <id>`.
+
+### poll vs watch
+
+| Feature  | `poll`                                    | `watch`                        |
+| -------- | ----------------------------------------- | ------------------------------ |
+| Lifetime | One-shot — exits after message or timeout | Continuous — loops forever     |
+| Output   | Full JSON array of messages               | One-line summary per message   |
+| Use case | Request-response, ad-hoc checks           | Background listener, always-on |
+| Restart  | Manual — must launch new poll             | Automatic — internal loop      |
 
 ### ❌ ANTI-PATTERNS (verified broken)
 
-**1. While-true bash loop:**
+**1. While-true bash loop with poll:**
 
 ```bash
 # BROKEN — bash buffers output, watch_patterns never triggers
-# Messages get auto-marked-read but agent never sees them
 while true; do ac poll --timeout 1800; done
 ```
 
-**2. Concurrent polls for the same agent:**
+Use `ac watch` instead — it handles the loop internally with proper flushing.
+
+**2. Concurrent polls/watch for the same agent:**
 
 ```bash
-# BROKEN — two polls race on auto-mark-read
-# Poll A catches message, marks it read → Poll B finds nothing
-# The poll lock now PREVENTS this — second poll gets blocked with clear error
-ac poll --timeout 1800 &
-ac poll --timeout 120
+# BROKEN — poll lock prevents this, second one gets blocked
+ac watch --timeout 300 &
+ac poll --timeout 60
 ```
 
 ### Stress-Test Results
@@ -221,13 +224,14 @@ ac poll --timeout 120
 
 ### When Michael Says "Listen" or "Communicate"
 
-Run `$AC poll` with long timeout in current session:
+For one-shot: `$AC poll --timeout 300` in foreground.
+
+For continuous listening (recommended), start background watch:
 
 ```
-1. $AC poll --timeout 300         → blocks until new message, auto-marks as read
-2. process message(s)
-3. $AC send target 'response'     → reply
-4. goto 1
+terminal(background=True, notify_on_complete=True,
+         watch_patterns=["[MSG]"],
+         command='$AC watch --timeout 300')
 ```
 
 No cron, no webhook. Only on explicit request.
