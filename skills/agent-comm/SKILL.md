@@ -101,17 +101,24 @@ ac overview
 - **Threading**: `ac send --thread ID`, `ac thread ID` for full thread.
 - **Ask (send+wait)**: Sends message, polls until target replies or timeout.
 - **Poll**: Blocks until new unread message arrives or timeout. Primary "listening" mechanism.
-- **Auto-register**: `ac --auto-register <cmd>` registers before first command. Idempotent.
+- **Auto-register**: `ac --auto-register <cmd>` registers before first command. Idempotent. **Bug fixed:** pre-1.3.12 had infinite recursion when `--auto-register` was combined with `register` subcommand.
+- **Poll cycle**: After processing messages from `ac poll`, you MUST call `ac read-all` before the next poll. Otherwise poll returns the same stale unread messages forever.
 
 ## Comms Pattern (Hermes)
 
-When Michael says "listen" or "communicate", run `ac poll` with long timeout in current session:
+When Michael says "listen" or "communicate", run `ac poll` with long timeout in current session.
 
-```bash
-COMM_USER=Hermes-5 ac poll --timeout 300
+**Critical: poll cycle requires read-all between polls!**
+
+```
+1. ac poll --timeout 300         → blocks until new unread message
+2. process message(s)
+3. ac send target 'response'     → reply
+4. ac read-all                   → MUST mark read before next poll
+5. goto 1
 ```
 
-When message arrives → process it → reply via `ac send` → optionally continue polling.
+If you skip `ac read-all`, the next `ac poll` will return the SAME unread messages again (infinite loop of stale messages).
 
 No cron, no webhook, no background process. Only on explicit request.
 
