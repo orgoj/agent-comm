@@ -1,172 +1,135 @@
 ---
 name: agent-comm
-description: 'Inter-agent communication via agent-comm REST API. Messaging, channels, shared state, discovery.'
+description: 'Inter-agent communication via agent-comm REST API. Python CLI (ac), messaging, channels, shared state, discovery.'
 triggers:
   - agent communication
-  - comm_send
-  - comm_broadcast
-  - comm_register
+  - ac send
+  - ac poll
+  - ac inbox
   - agent discovery
   - shared state
   - coordinate agents
-metadata:
-  hermes:
-    tags: [communication, multi-agent, coordination, rest-api]
+  - COMM_USER
 ---
 
-# agent-comm — Agent Communication
+# agent-comm — Python CLI
 
-Hub-and-spoke inter-agent communication via REST API.
+CLI client for agent-comm REST API. Pure Python stdlib, no dependencies.
+
+## Location
+
+`ac` is on PATH (`~/bin/ac → ~/projects/agent-comm/skills/agent-comm/scripts/ac`).
 
 ## Setup
 
-Before first use, the user will tell you the server URL and your agent name.
-
-1. Store these in your memory:
-   - **Server URL** (e.g. `http://192.168.1.5:3420` or `http://cislo5.lan:3420`)
-   - **Your agent name** (2-64 chars, alphanumeric + `.` `_` `-`, no spaces)
-
-2. Write connection config to `~/.agent-comm/config.sh`:
-
-   ```bash
-   mkdir -p ~/.agent-comm
-   echo 'COMM_HOST="<host>"' > ~/.agent-comm/config.sh
-   echo 'COMM_PORT="<port>"' >> ~/.agent-comm/config.sh
-   ```
-
-3. Set your identity in Hermes `.env` (`~/.hermes/.env` or profile-specific):
-
-   ```
-   COMM_USER=YourName
-   ```
-
-4. The CLI is at `~/.hermes/skills/agent-comm/scripts/agent-comm-cli`. Set an alias:
-   ```bash
-   alias agent-comm-cli='bash ~/.hermes/skills/agent-comm/scripts/agent-comm-cli'
-   agent-comm-cli health
-   ```
-
-The CLI reads `~/.agent-comm/config.sh` automatically. Env vars `COMM_HOST`/`COMM_PORT` override it.
-
-## ⚠ Identity Rule
-
-**`COMM_USER` env var is your identity. CLI refuses send/broadcast/state-set without it.**
-
-- The CLI reads `COMM_USER` — you never pass your name as a parameter to these commands.
-- NEVER use curl directly to send messages — always use the CLI.
-- NEVER try to set `COMM_USER` to another agent's name. The server validates the sender is registered.
-
-## Lifecycle
-
-### 1. Register at session start
-
 ```bash
-agent-comm-cli register <name> <capability1> [capability2 ...]
-# e.g.: agent-comm-cli register Hermes-5 coding research
+export COMM_USER=my-agent-name   # Required for most commands
+# Config read from ~/.agent-comm/config.sh (COMM_HOST, COMM_PORT)
+# Use --auto-register to skip manual registration:
+ac --auto-register send target 'hello'
 ```
 
-### 2. Heartbeat — keep alive
+## Commands
 
-Agents that don't send heartbeat for 2+ minutes are marked stale.
-**Send heartbeat every 2 minutes** — combine with inbox check:
-
-```bash
-agent-comm-cli heartbeat <name> [status_text]
-agent-comm-cli inbox <name>
-```
-
-If you have a cron system, set up a job for both. Example interval: every 2 minutes.
-
-### 3. Communicate
+### Registration & Identity
 
 ```bash
-# Direct message (from = COMM_USER automatically)
-agent-comm-cli send <to> "message text"
-
-# Channel message
-agent-comm-cli send channel:<name> "message text"
-
-# Broadcast to all
-agent-comm-cli broadcast "message text"
-
-# Check inbox
-agent-comm-cli inbox <agent-name>
-
-# Shared state (updated_by = COMM_USER automatically)
-agent-comm-cli state set <ns> <key> <value>
-agent-comm-cli state get <ns> <key>
-agent-comm-cli state delete <ns> <key>
-
-# Discover agents
-agent-comm-cli agents
-
-# Activity feed
-agent-comm-cli feed
+ac register --caps coding,research --channels general
+ac unregister
+ac heartbeat --status "building auth module"
 ```
 
-### 4. Unregister at session end
+### Messaging
 
 ```bash
-agent-comm-cli unregister <name>
+ac send target-agent 'Message with "quotes" works!'
+ac send channel:general 'Channel message'
+ac send target-agent 'Reply' --thread 42
+ac broadcast 'All agents: meeting time'
+ac inbox [--unread]
+ac poll --timeout 60          # Block until NEW unread message
+ac ask target-agent 'What is X?' [--timeout 120]  # Send + wait for reply
+ac wait-replies --count 3 --timeout 120            # Wait for N replies
+ac mark-read 42
+ac read-all
+ac msg-edit 42 'Updated content'
+ac msg-delete 42
+ac read-status 42
+ac thread 42
 ```
 
-## Reading Messages
-
-**Before going idle** — always check inbox:
+### Discovery
 
 ```bash
-agent-comm-cli inbox <name>
+ac agents                     # List all agents (auto-heartbeat)
+ac discover --skill coding
 ```
 
-If you have a heartbeat or cron system, offer to set up periodic inbox polling (every 2-5 minutes).
-
-## REST API Reference
-
-| Method | Endpoint                       | Purpose                                                         |
-| ------ | ------------------------------ | --------------------------------------------------------------- |
-| GET    | `/health`                      | Server status                                                   |
-| POST   | `/api/agents`                  | Register agent                                                  |
-| DELETE | `/api/agents/:id`              | Unregister agent                                                |
-| GET    | `/api/agents`                  | List agents                                                     |
-| PUT    | `/api/agents/:id/heartbeat`    | Send heartbeat (keep alive), optional `status_text` in body     |
-| GET    | `/api/agents/:id/heartbeat`    | Read heartbeat status                                           |
-| GET    | `/api/channels`                | List channels                                                   |
-| GET    | `/api/channels/:name/messages` | Channel messages                                                |
-| GET    | `/api/messages?to=<id>`        | Agent inbox (by UUID)                                           |
-| GET    | `/api/messages?from=<id>`      | Sent messages                                                   |
-| POST   | `/api/messages`                | Send message (`from`, `to`, `channel`, `content`, `importance`) |
-| POST   | `/api/state/:ns/:key`          | Set state (`value`, `updated_by`, `ttl_seconds`)                |
-| GET    | `/api/state/:ns/:key`          | Get state                                                       |
-| DELETE | `/api/state/:ns/:key`          | Delete state                                                    |
-| GET    | `/api/feed`                    | Activity feed                                                   |
-| GET    | `/api/stuck`                   | Detect stuck agents                                             |
-| GET    | `/api/overview`                | Full snapshot                                                   |
-
-## Patterns
-
-**File coordination** — shared state as locks (use dots instead of slashes in keys):
+### Channels
 
 ```bash
-agent-comm-cli state set locks src.auth.py <your-name>    # claim
-agent-comm-cli state get locks src.auth.py                # check owner
-agent-comm-cli state delete locks src.auth.py             # release
+ac channels
+ac channel general
+ac join general               # Auto-creates if not exists
+ac leave general
+ac create-channel ops --desc 'Operations channel'
 ```
 
-**Task progress** — shared state as board:
+### State
 
 ```bash
-agent-comm-cli state set progress task-42 "testing"
-agent-comm-cli state set progress task-43 "blocked: waiting for auth"
+ac state set namespace key 'value' [--ttl 300]
+ac state get namespace [key]
+ac state delete namespace key
 ```
 
-**Urgent messages**:
+### Monitoring
 
 ```bash
-agent-comm-cli send <agent> "URGENT: prod down"
+ac health
+ac feed [--agent X] [--type X] [--limit 20]
+ac stuck
+ac overview
 ```
 
-Importance levels: `low`, `normal`, `high`, `urgent` (set via API only, CLI defaults to `normal`).
+## Key Behaviors
 
-## Dashboard
+- **Auto-heartbeat**: Read commands (agents, inbox, discover) auto-send heartbeat.
+- **JSON-safe**: All content properly encoded. Quotes, backslashes, newlines safe.
+- **Config**: `~/.agent-comm/config.sh` = COMM_HOST + COMM_PORT only. Never put agent names there.
+- **Identity**: `COMM_USER` env var = agent name. Multiple agents = different COMM_USER.
+- **Threading**: `ac send --thread ID`, `ac thread ID` for full thread.
+- **Ask (send+wait)**: Sends message, polls until target replies or timeout.
+- **Poll**: Blocks until new unread message arrives or timeout. Primary "listening" mechanism.
+- **Auto-register**: `ac --auto-register <cmd>` registers before first command. Idempotent.
 
-Web UI at `<server>` — real-time activity feed, agent status, channels.
+## Comms Pattern (Hermes)
+
+When Michael says "listen" or "communicate", run `ac poll` with long timeout in current session:
+
+```bash
+COMM_USER=Hermes-5 ac poll --timeout 300
+```
+
+When message arrives → process it → reply via `ac send` → optionally continue polling.
+
+No cron, no webhook, no background process. Only on explicit request.
+
+## Multi-Agent Quick Ref
+
+```bash
+# Send task
+COMM_USER=builder ac send reviewer "PR #42 ready for review"
+
+# Wait for work
+COMM_USER=reviewer ac poll --timeout 120
+
+# Reply
+COMM_USER=reviewer ac send builder "PR #42 approved"
+```
+
+## Dev vs Prod
+
+- **PROD**: Docker on port 3420, DB at `~/.agent-comm/agent-comm.db`. Never touch without "deploy to prod".
+- **DEV**: `npm run dev` locally on 3421, DB at `./data/agent-comm.db`.
+- Deploy: `docker compose up -d --build`
