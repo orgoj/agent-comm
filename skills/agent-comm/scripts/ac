@@ -16,12 +16,61 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import argparse
+import signal
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
 CONFIG_PATH = os.path.expanduser("~/.agent-comm/config.sh")
 TIMEOUT = 10       # default HTTP timeout (seconds)
 POLL_TIMEOUT = 3605  # max poll wait — loops in 55s chunks, up to 1h
+LOCK_DIR = os.path.expanduser("~/.agent-comm/locks")
+
+
+# ── Poll Lock ────────────────────────────────────────────────────────────────
+
+def _lock_path(agent_name: str) -> str:
+    return os.path.join(LOCK_DIR, f"{agent_name}.poll.lock")
+
+
+def _lock_acquire(agent_name: str, force: bool = False):
+    """Acquire poll lock. Fails if another poll is running (unless force).
+    Stale locks from dead processes are auto-removed."""
+    os.makedirs(LOCK_DIR, exist_ok=True)
+    path = _lock_path(agent_name)
+
+    if os.path.exists(path):
+        try:
+            with open(path) as f:
+                pid = int(f.read().strip())
+            # Check if process is still alive
+            os.kill(pid, 0)
+            if force:
+                os.remove(path)
+            else:
+                print(
+                    f"Error: agent {agent_name} already has an active poll "
+                    f"(PID {pid}).\n"
+                    f"  Fix: wait for the current poll to finish, or kill it "
+                    f"with 'kill {pid}', or use: ac poll --force --timeout N",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        except (ProcessLookupError, PermissionError):
+            # Dead process — remove stale lock automatically
+            os.remove(path)
+        except (ValueError, OSError):
+            os.remove(path)
+
+    with open(path, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _lock_release(agent_name: str):
+    """Release poll lock."""
+    try:
+        os.remove(_lock_path(agent_name))
+    except FileNotFoundError:
+        pass
 
 
 class Client:
@@ -239,20 +288,38 @@ class Client:
         self._mark_read_msgs(msgs)
         return msgs
 
-    def poll(self, timeout=60, all_=False):
+    def poll(self, timeout=60, all_=False, force=False):
         """Block until new unread message arrives or timeout.
         Loops in 55s server-poll chunks because backend caps at 60s.
-        Auto-marks returned messages as read."""
+        Auto-marks returned messages as read.
+        Protected by PID-based lock — one poll per agent."""
         import time
 
         self._need_user()
         aid = self._resolve(self.user)
+
+        # Acquire lock — ensures only one poll per agent
+        _lock_acquire(self.user, force=force)
+
+        # Cleanup on exit (normal or signal)
+        def _cleanup(*_args):
+            _lock_release(self.user)
+            sys.exit(1)
+        signal.signal(signal.SIGTERM, _cleanup)
+        signal.signal(signal.SIGINT, _cleanup)
+        import atexit
+        atexit.register(_lock_release, self.user)
+
         deadline = time.monotonic() + timeout
 
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                print("Error: poll timeout expired with no messages", file=sys.stderr)
+                print(
+                    f"Error: poll timed out after {timeout}s with no messages.\n"
+                    f"  This is normal — start a new poll to keep waiting.",
+                    file=sys.stderr,
+                )
                 sys.exit(1)
 
             poll_sec = min(int(remaining), 55)
@@ -520,6 +587,8 @@ def main():
                     help="Max wait seconds (default 60, no hard cap)")
     po.add_argument("--all", action="store_true",
                     help="Include already-read messages")
+    po.add_argument("--force", action="store_true",
+                    help="Force start even if another poll is running")
 
     ask = sub.add_parser("ask", help="Send message and wait for reply")
     ask.add_argument("to", help="Recipient agent name/ID")
@@ -617,7 +686,7 @@ def main():
     elif cmd == "inbox":
         output(c.inbox(args.unread))
     elif cmd == "poll":
-        output(c.poll(args.timeout, args.all))
+        output(c.poll(args.timeout, args.all, args.force))
     elif cmd == "ask":
         result = c.ask(args.to, args.content, args.timeout)
         if result:
