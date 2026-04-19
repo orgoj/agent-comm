@@ -144,42 +144,49 @@ Error: agent Hermes-nano already has an active poll (PID 869507).
   or use: ac poll --force --timeout N
 ```
 
-### Background Poll Pattern (for Hermes agents)
-
-Use `background=true` + `notify_on_complete=true` — NOT `watch_patterns` (generates false positives).
-
-```bash
-# CORRECT — poll up to 30min in background, notify when done
-background=true, notify_on_complete=true, timeout=1810
-$AC poll --timeout 1800
-
-# After processing the message, start a new poll (old one already finished)
-```
-
-Do NOT use `watch_patterns=["\"content\":"]` — it matches empty output and stale processes.
-
 ## Comms Pattern (Hermes Agents)
 
-### Canonical Pattern: Single Background Poll + notify_on_complete
+### Pattern A: notify_on_complete only (universal)
 
-This is the **only** correct pattern for Hermes agents receiving messages. Stress-tested with 3 test scenarios.
+Works for all agents. Poll exits on message or timeout, Hermes gets notified.
 
 ```python
 # 1. Start one background poll
-terminal(background=True, notify_on_complete=True, command='ac poll --timeout 1800')
+terminal(background=True, notify_on_complete=True, timeout=1810,
+         command='ac poll --timeout 1800')
 
 # 2. On notify — process, reply, start next poll
 if exit_code == 0:
     # Got message(s) — process them, reply, start new poll
-    terminal(background=True, notify_on_complete=True, command='ac poll --timeout 1800')
+    terminal(background=True, notify_on_complete=True, timeout=1810,
+             command='ac poll --timeout 1800')
 elif exit_code == 1:
     # Timeout — no messages, start new poll immediately
-    terminal(background=True, notify_on_complete=True, command='ac poll --timeout 1800')
+    terminal(background=True, notify_on_complete=True, timeout=1810,
+             command='ac poll --timeout 1800')
+```
+
+### Pattern B: notify_on_complete + watch_patterns (preferred when supported)
+
+Same as Pattern A but adds `watch_patterns` for **immediate** notification when output
+appears — no need to wait for poll to fully exit. Works because it's a SINGLE poll process,
+not a while-loop (the while-loop variant is broken due to bash output buffering).
+
+```python
+# 1. Start one background poll with watch
+terminal(background=True, notify_on_complete=True,
+         watch_patterns=['"id":'],
+         timeout=1810,
+         command='ac poll --timeout 1800')
+
+# 2. Watch fires immediately when message arrives → process output
+# 3. Poll exits (exit 0) → notify_on_complete fires → start new poll
+# Both notifications work — watch is faster, notify_on_complete is the safety net
 ```
 
 ### ❌ ANTI-PATTERNS (verified broken)
 
-**1. While-true bash loop with watch_patterns:**
+**1. While-true bash loop:**
 
 ```bash
 # BROKEN — bash buffers output, watch_patterns never triggers
@@ -192,6 +199,7 @@ while true; do ac poll --timeout 1800; done
 ```bash
 # BROKEN — two polls race on auto-mark-read
 # Poll A catches message, marks it read → Poll B finds nothing
+# The poll lock now PREVENTS this — second poll gets blocked with clear error
 ac poll --timeout 1800 &
 ac poll --timeout 120
 ```
@@ -208,6 +216,8 @@ ac poll --timeout 120
 | Poll lock: --force override                            | ✅ PASS | Takes over cleanly                              |
 | Poll lock: auto-cleanup on process death               | ✅ PASS | atexit + signal handlers                        |
 | Stress: 17×23=391 via real message round-trip          | ✅ PASS | Full chain: send → poll → process → reply       |
+| Watch pattern on single poll (Hermes-5)                | ✅ PASS | Immediate notification on message arrival       |
+| Watch pattern on single poll (Hermes-nano)             | ✅ PASS | sqrt(144)=12, watch + notify_on_complete        |
 
 ### When Michael Says "Listen" or "Communicate"
 
