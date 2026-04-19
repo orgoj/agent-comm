@@ -164,7 +164,6 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     const body = await readBody(req);
     const statusText = body.status_text as string | undefined;
     ctx.agents.heartbeat(agent.id, statusText ?? null);
-    ctx.feed.logInternal(agent.id, 'heartbeat', agent.name, 'via REST');
     json(res, { ok: true, agent_id: agent.id, name: agent.name });
   });
 

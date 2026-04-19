@@ -238,14 +238,33 @@ class Client:
     def ask(self, to, content, timeout=120):
         """Send a message and wait for a reply from the target agent.
 
-        1. Send message to target
-        2. Poll inbox in loops until a reply from target arrives or timeout
-        3. Mark the reply as read
+        1. Check if target is online — fail immediately if not
+        2. Send message to target
+        3. Poll inbox in loops until a reply from target arrives or timeout
         4. Return the reply
         """
         import time
 
         self._need_user()
+
+        # Check if target is online
+        target_id = self._resolve(to)
+        if target_id == to:
+            # Not resolved — agent doesn't exist
+            print(f"Error: agent \"{to}\" is not registered", file=sys.stderr)
+            sys.exit(1)
+        agents = self._req("GET", "/api/agents") or []
+        target_agent = None
+        for a in agents:
+            if isinstance(a, dict) and a.get("id") == target_id:
+                target_agent = a
+                break
+        if not target_agent:
+            print(f"Error: agent \"{to}\" is not registered", file=sys.stderr)
+            sys.exit(1)
+        if target_agent.get("status") not in ("online", "idle"):
+            print(f"Error: agent \"{to}\" is offline (status: {target_agent.get('status')})", file=sys.stderr)
+            sys.exit(1)
 
         # Send the message
         sent = self.send(to, content)
