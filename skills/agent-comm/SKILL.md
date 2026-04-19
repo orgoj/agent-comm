@@ -29,12 +29,17 @@ export COMM_USER=my-agent-name   # Required for most commands
 ac --auto-register send target 'hello'
 ```
 
+## Roles
+
+- **`human`** — the human operator (Michael). NOT an agent. Has full authority over all agents. Visible in `ac agents` as status "online" when the web dashboard is open.
+- **Agents** — AI instances (Hermes-5, Hermes-nano, etc.). Each has its own `COMM_USER`.
+
 ## Commands
 
 ### Registration & Identity
 
 ```bash
-ac register --caps coding,research --channels general
+ac register --caps coding,research
 ac unregister
 ac heartbeat --status "building auth module"
 ```
@@ -47,7 +52,7 @@ ac send channel:general 'Channel message'
 ac send target-agent 'Reply' --thread 42
 ac broadcast 'All agents: meeting time'
 ac inbox [--unread]
-ac poll --timeout 60          # Block until NEW unread message
+ac poll --timeout 60          # Block until new message, auto-marks as read
 ac ask target-agent 'What is X?' [--timeout 120]  # Send + wait for reply
 ac wait-replies --count 3 --timeout 120            # Wait for N replies
 ac mark-read 42
@@ -95,30 +100,24 @@ ac overview
 ## Key Behaviors
 
 - **Auto-heartbeat**: Read commands (agents, inbox, discover) auto-send heartbeat.
+- **Auto-mark read**: `ac poll` automatically marks returned messages as read. Next poll won't return them again.
 - **JSON-safe**: All content properly encoded. Quotes, backslashes, newlines safe.
 - **Config**: `~/.agent-comm/config.sh` = COMM_HOST + COMM_PORT only. Never put agent names there.
 - **Identity**: `COMM_USER` env var = agent name. Multiple agents = different COMM_USER.
 - **Threading**: `ac send --thread ID`, `ac thread ID` for full thread.
-- **Ask (send+wait)**: Sends message, polls until target replies or timeout.
-- **Poll**: Blocks until new unread message arrives or timeout. Primary "listening" mechanism.
-- **Auto-register**: `ac --auto-register <cmd>` registers before first command. Idempotent. **Bug fixed:** pre-1.3.12 had infinite recursion when `--auto-register` was combined with `register` subcommand.
-- **Poll cycle**: After processing messages from `ac poll`, you MUST call `ac read-all` before the next poll. Otherwise poll returns the same stale unread messages forever.
+- **Ask (send+wait)**: Sends message, polls until target replies or timeout. Auto-marks reply as read.
+- **Auto-register**: `ac --auto-register <cmd>` registers before first command. Idempotent.
 
 ## Comms Pattern (Hermes)
 
 When Michael says "listen" or "communicate", run `ac poll` with long timeout in current session.
 
-**Critical: poll cycle requires read-all between polls!**
-
 ```
-1. ac poll --timeout 300         → blocks until new unread message
+1. ac poll --timeout 300         → blocks until new message, auto-marks as read
 2. process message(s)
 3. ac send target 'response'     → reply
-4. ac read-all                   → MUST mark read before next poll
-5. goto 1
+4. goto 1                        → no read-all needed, poll handles it
 ```
-
-If you skip `ac read-all`, the next `ac poll` will return the SAME unread messages again (infinite loop of stale messages).
 
 No cron, no webhook, no background process. Only on explicit request.
 

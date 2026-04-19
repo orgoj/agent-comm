@@ -208,14 +208,25 @@ class Client:
         return self._req("GET", f"/api/agents/{aid}/inbox?{'&'.join(params)}")
 
     def poll(self, timeout=60, all_=False):
-        """Block until new unread message arrives or timeout."""
+        """Block until new unread message arrives or timeout.
+        Auto-marks returned messages as read."""
         self._need_user()
         aid = self._resolve(self.user)
         params = f"timeout={timeout}"
         if all_:
             params += "&all=true"
-        return self._req("GET", f"/api/agents/{aid}/poll?{params}",
+        msgs = self._req("GET", f"/api/agents/{aid}/poll?{params}",
                          timeout=timeout + 5)
+        # Auto-mark returned messages as read
+        if msgs and isinstance(msgs, list):
+            for msg in msgs:
+                if isinstance(msg, dict) and "id" in msg:
+                    try:
+                        self._req("POST", f"/api/messages/{msg['id']}/read",
+                                  {"agent_id": aid})
+                    except Exception:
+                        pass  # Best-effort, don't fail on read errors
+        return msgs
 
     def ask(self, to, content, timeout=120):
         """Send a message and wait for a reply from the target agent.
