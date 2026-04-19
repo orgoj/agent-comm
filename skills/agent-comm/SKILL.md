@@ -137,9 +137,56 @@ $AC poll --timeout 1800
 
 Do NOT use `watch_patterns=["\"content\":"]` — it matches empty output and stale processes.
 
-## Comms Pattern (Hermes)
+## Comms Pattern (Hermes Agents)
 
-When Michael says "listen" or "communicate", run `$AC poll` with long timeout in current session.
+### Canonical Pattern: Single Background Poll + notify_on_complete
+
+This is the **only** correct pattern for Hermes agents receiving messages. Stress-tested with 3 test scenarios.
+
+```python
+# 1. Start one background poll
+terminal(background=True, notify_on_complete=True, command='ac poll --timeout 1800')
+
+# 2. On notify — process, reply, start next poll
+if exit_code == 0:
+    # Got message(s) — process them, reply, start new poll
+    terminal(background=True, notify_on_complete=True, command='ac poll --timeout 1800')
+elif exit_code == 1:
+    # Timeout — no messages, start new poll immediately
+    terminal(background=True, notify_on_complete=True, command='ac poll --timeout 1800')
+```
+
+### ❌ ANTI-PATTERNS (verified broken)
+
+**1. While-true bash loop with watch_patterns:**
+
+```bash
+# BROKEN — bash buffers output, watch_patterns never triggers
+# Messages get auto-marked-read but agent never sees them
+while true; do ac poll --timeout 1800; done
+```
+
+**2. Concurrent polls for the same agent:**
+
+```bash
+# BROKEN — two polls race on auto-mark-read
+# Poll A catches message, marks it read → Poll B finds nothing
+ac poll --timeout 1800 &
+ac poll --timeout 120
+```
+
+### Stress-Test Results
+
+| Test                                                   | Result  | Notes                                           |
+| ------------------------------------------------------ | ------- | ----------------------------------------------- |
+| Basic poll-receive-reply                               | ✅ PASS | 17s round-trip                                  |
+| Timeout recovery (poll → timeout → new poll → message) | ✅ PASS | After killing stale while-loop process          |
+| Burst 3 messages in one poll                           | ✅ PASS | All 3 delivered in single batch                 |
+| Concurrent polls (while-loop + manual poll)            | ❌ FAIL | Race condition, messages lost to auto-mark-read |
+
+### When Michael Says "Listen" or "Communicate"
+
+Run `$AC poll` with long timeout in current session:
 
 ```
 1. $AC poll --timeout 300         → blocks until new message, auto-marks as read
@@ -148,7 +195,7 @@ When Michael says "listen" or "communicate", run `$AC poll` with long timeout in
 4. goto 1
 ```
 
-No cron, no webhook, no background process. Only on explicit request.
+No cron, no webhook. Only on explicit request.
 
 ## Multi-Agent Quick Ref
 
