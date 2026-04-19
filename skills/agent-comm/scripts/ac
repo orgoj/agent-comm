@@ -198,6 +198,19 @@ class Client:
             body["importance"] = importance
         return self._req("POST", "/api/messages/broadcast", body)
 
+    def _mark_read_msgs(self, msgs):
+        """Auto-mark returned messages as read. Best-effort."""
+        if not msgs or not isinstance(msgs, list):
+            return
+        aid = self._resolve(self.user)
+        for msg in msgs:
+            if isinstance(msg, dict) and "id" in msg:
+                try:
+                    self._req("POST", f"/api/messages/{msg['id']}/read",
+                              {"agent_id": aid})
+                except Exception:
+                    pass
+
     def inbox(self, unread=False):
         self._need_user()
         self._heartbeat()
@@ -205,7 +218,9 @@ class Client:
         params = ["limit=50"]
         if unread:
             params.append("unread=true")
-        return self._req("GET", f"/api/agents/{aid}/inbox?{'&'.join(params)}")
+        msgs = self._req("GET", f"/api/agents/{aid}/inbox?{'&'.join(params)}")
+        self._mark_read_msgs(msgs)
+        return msgs
 
     def poll(self, timeout=60, all_=False):
         """Block until new unread message arrives or timeout.
@@ -217,15 +232,7 @@ class Client:
             params += "&all=true"
         msgs = self._req("GET", f"/api/agents/{aid}/poll?{params}",
                          timeout=timeout + 5)
-        # Auto-mark returned messages as read
-        if msgs and isinstance(msgs, list):
-            for msg in msgs:
-                if isinstance(msg, dict) and "id" in msg:
-                    try:
-                        self._req("POST", f"/api/messages/{msg['id']}/read",
-                                  {"agent_id": aid})
-                    except Exception:
-                        pass  # Best-effort, don't fail on read errors
+        self._mark_read_msgs(msgs)
         return msgs
 
     def ask(self, to, content, timeout=120):
@@ -327,7 +334,9 @@ class Client:
 
     def thread(self, msg_id):
         self._heartbeat()
-        return self._req("GET", f"/api/messages/{msg_id}/thread")
+        msgs = self._req("GET", f"/api/messages/{msg_id}/thread")
+        self._mark_read_msgs(msgs)
+        return msgs
 
     def state_set(self, ns, key, value, ttl=None):
         self._need_user()
