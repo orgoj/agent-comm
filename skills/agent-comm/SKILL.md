@@ -127,24 +127,30 @@ $AC overview
 - **Ask (send+wait)**: Checks target is online, sends message, polls until target replies or timeout. Fails immediately if target is offline or not registered.
 - **Auto-register**: `$AC --auto-register <cmd>` registers before first command. Idempotent.
 
-### ⚠️ CRITICAL: Poll Lock (one poll per agent, enforced)
+### ⚠️ CRITICAL: Poll Lock (fcntl.flock — kernel-guaranteed, bulletproof)
 
-The `ac poll` and `ac watch` commands use a **PID-based lock** (`~/.agent-comm/locks/<name>.poll.lock`) to prevent concurrent polls:
+The `ac poll` and `ac watch` commands use **`fcntl.flock()`** on `~/.agent-comm/locks/<name>.poll.lock`:
 
-- **Concurrent poll blocked** with clear error: agent name, PID of active poll, suggested fixes
-- **Stale locks auto-removed**: dead process → lock silently cleaned on next poll attempt
-- **Cleanup on exit**: `atexit` + SIGTERM/SIGINT handlers with `os._exit(1)` — immediate terminate, no race window
-- **Force override**: `$AC poll --force --timeout N` when old poll is truly stuck
-- **Lock test results** (verified Hermes-nano): Block ✅, Force override ✅, Auto-cleanup ✅, Normal after cleanup ✅
+- **Atomic at kernel level** — no TOCTOU race, no two processes can acquire simultaneously
+- **Auto-released on any process death** — even SIGKILL, segfault, power loss. Kernel closes FD → lock released.
+- **`try/finally` + signal handlers**: Normal return releases via `finally`, signals release via handler + `os._exit(1)`
+- **Force override**: `--force` sends SIGTERM to current holder, waits 3s, then blocking acquire
+- **No `atexit` needed** — flock is released when FD is closed (happens automatically on death)
 
-**Why `os._exit(1)` instead of `sys.exit(1)`**: `sys.exit` raises `SystemExit` which Python handles asynchronously — if the process is inside C code (urllib socket read), there's a window where the lock is released but the process hasn't died yet. A new process could acquire the lock while the old one still has an in-flight HTTP request. `os._exit(1)` terminates immediately — zero race window.
+**Why `fcntl.flock` instead of PID-file lock**: The old PID-file approach had:
+
+1. TOCTOU race between `os.path.exists()` and `open()` — two processes could acquire the same lock
+2. Orphaned locks if SIGTERM arrived during `_lock_acquire` itself
+3. Force mode only deleted the file but didn't kill the other process — both ran concurrently
+4. `sys.exit(1)` in signal handler left a race window (lock released but process still had in-flight HTTP request)
+
+**Why `os._exit(1)` in signal handler**: `sys.exit` raises `SystemExit` which Python handles asynchronously. If the process is inside C code (urllib socket read), there's a window where the lock is released but the process hasn't died yet. `os._exit(1)` terminates immediately.
 
 Error message example:
 
 ```
-Error: agent Hermes-nano already has an active poll (PID 869507).
-  Fix: wait for the current poll to finish, or kill it with 'kill 869507',
-  or use: ac poll --force --timeout N
+Error: agent Hermes-5 already has an active poll (PID 762125).
+  Fix: wait for it, kill it, or use --force
 ```
 
 ## watch — Continuous Message Listener
