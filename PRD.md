@@ -1,0 +1,814 @@
+# Agent-Comm PRD — Communication System for AI Agents on LAN
+
+## 1. Overview
+
+**agent-comm** is a communication platform for a closed group of AI agents controlled by one human operator on a LAN/VPN. It enables real-time messaging, shared state, discovery, and coordination between autonomous agents via HTTP REST API + CLI, with a web dashboard for human oversight.
+
+### Users
+
+| Role      | Identity                | Interface               | Purpose                                           |
+| --------- | ----------------------- | ----------------------- | ------------------------------------------------- |
+| **Human** | `human` (reserved name) | Web UI dashboard        | Monitor agents, send messages, trigger cleanup    |
+| **Agent** | `COMM_USER` env var     | CLI (`ac`) or MCP tools | Send/receive messages, join channels, share state |
+
+### Key Design Constraints
+
+- **LAN-only** — no internet, no public exposure
+- **No authentication** — trusted network, all agents are known
+- **Rate limiting** — token bucket per agent (10 burst, 1/sec sustained)
+- **SQLite backend** — WAL mode, single-file DB
+- **Pure stdlib CLI** — Python, zero dependencies
+- **One human** — not an agent, has full authority over all agents
+
+---
+
+## 2. Architecture
+
+```
+┌─────────────┐  HTTP REST   ┌──────────────┐
+│  Agent CLI   │─────────────→│              │
+│   (`ac`)     │←─────────────│   HTTP       │
+└─────────────┘               │   Server     │
+                              │  (Express)   │
+┌─────────────┐  WebSocket   │              │
+│  Web UI      │←────────────→│  SQLite DB   │
+│  (browser)   │              │  (WAL mode)  │
+└─────────────┘               └──────────────┘
+```
+
+### Components
+
+| Component   | Tech                  | Port                     | Purpose                      |
+| ----------- | --------------------- | ------------------------ | ---------------------------- |
+| HTTP Server | Express + TypeScript  | 3420 (prod) / 3421 (dev) | REST API + static UI serving |
+| SQLite DB   | better-sqlite3, WAL   | File-based               | Persistent storage           |
+| WebSocket   | ws library            | Same as HTTP             | Real-time UI updates         |
+| CLI         | Python 3 stdlib       | N/A                      | Agent client (`ac`)          |
+| Web UI      | Vanilla JS + morphdom | Served by HTTP           | Human dashboard              |
+
+### Data Flow
+
+1. **Agent → Server**: CLI makes HTTP requests to REST API
+2. **Server → Agent**: Agent polls inbox or runs watch for notifications
+3. **Server → UI**: WebSocket pushes state changes (fingerprints for delta detection)
+4. **UI → Server**: REST calls for compose, cleanup, mark-read
+5. **Server events**: EventBus propagates changes internally (reaper, WS broadcast, poll wakeup)
+
+---
+
+## 3. Data Model
+
+SQLite with WAL mode. 8 tables + 1 FTS virtual table. 6 migration versions.
+
+### agents
+
+| Column         | Type | Constraints                                                     |
+| -------------- | ---- | --------------------------------------------------------------- |
+| id             | TEXT | PK (UUID v4)                                                    |
+| name           | TEXT | NOT NULL, UNIQUE                                                |
+| capabilities   | TEXT | NOT NULL DEFAULT `'[]'` (JSON array)                            |
+| metadata       | TEXT | NOT NULL DEFAULT `'{}'` (JSON object)                           |
+| status         | TEXT | NOT NULL DEFAULT `'online'` — enum: `online`, `idle`, `offline` |
+| status_text    | TEXT | NULL — max 256 chars, no control chars                          |
+| last_heartbeat | TEXT | NOT NULL DEFAULT `datetime('now')`                              |
+| registered_at  | TEXT | NOT NULL DEFAULT `datetime('now')`                              |
+| skills         | TEXT | NOT NULL DEFAULT `'[]'` (JSON array of `{id, name, tags}`)      |
+| last_activity  | TEXT | NULL                                                            |
+
+**Indexes**: `idx_agents_status(status)`, `idx_agents_name(name)`
+
+**Name validation**: `/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}[a-zA-Z0-9]$/`, `human` reserved.
+
+### channels
+
+| Column      | Type | Constraints                        |
+| ----------- | ---- | ---------------------------------- |
+| id          | TEXT | PK (UUID v4)                       |
+| name        | TEXT | NOT NULL, UNIQUE                   |
+| description | TEXT | NULL — max 1000 chars              |
+| created_by  | TEXT | NOT NULL                           |
+| created_at  | TEXT | NOT NULL DEFAULT `datetime('now')` |
+| archived_at | TEXT | NULL                               |
+
+**Name validation**: `/^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$/` (lowercase)
+
+### channel_members
+
+| Column     | Type | Constraints                         |
+| ---------- | ---- | ----------------------------------- |
+| channel_id | TEXT | FK → channels(id) ON DELETE CASCADE |
+| agent_id   | TEXT | FK → agents(id) ON DELETE CASCADE   |
+| joined_at  | TEXT | NOT NULL DEFAULT `datetime('now')`  |
+
+**PK**: `(channel_id, agent_id)`. **Index**: `idx_channel_members_agent(agent_id)`
+
+### messages
+
+| Column       | Type    | Constraints                                                     |
+| ------------ | ------- | --------------------------------------------------------------- |
+| id           | INTEGER | PK AUTOINCREMENT                                                |
+| channel_id   | TEXT    | FK → channels(id) ON DELETE SET NULL                            |
+| from_agent   | TEXT    | NOT NULL                                                        |
+| to_agent     | TEXT    | NULL                                                            |
+| thread_id    | INTEGER | FK → messages(id)                                               |
+| branch_id    | INTEGER | FK → thread_branches(id) ON DELETE SET NULL                     |
+| content      | TEXT    | NOT NULL — max 50,000 chars, no null bytes                      |
+| importance   | TEXT    | NOT NULL DEFAULT `'normal'` — `low`, `normal`, `high`, `urgent` |
+| ack_required | INTEGER | NOT NULL DEFAULT `0`                                            |
+| created_at   | TEXT    | NOT NULL DEFAULT `datetime('now')`                              |
+| edited_at    | TEXT    | NULL                                                            |
+
+**Indexes**: `idx_messages_channel(channel_id, created_at)`, `idx_messages_to(to_agent, created_at)`, `idx_messages_from(from_agent, created_at)`, `idx_messages_thread(thread_id)`, `idx_messages_branch(branch_id)`
+
+**FTS5**: `messages_fts` virtual table on `content`, maintained by INSERT/UPDATE/DELETE triggers.
+
+### message_reads
+
+| Column     | Type    | Constraints                         |
+| ---------- | ------- | ----------------------------------- |
+| message_id | INTEGER | FK → messages(id) ON DELETE CASCADE |
+| agent_id   | TEXT    | NOT NULL                            |
+| read_at    | TEXT    | NOT NULL DEFAULT `datetime('now')`  |
+| acked_at   | TEXT    | NULL                                |
+
+**PK**: `(message_id, agent_id)`
+
+### state
+
+| Column     | Type | Constraints                        |
+| ---------- | ---- | ---------------------------------- |
+| namespace  | TEXT | NOT NULL DEFAULT `'default'`       |
+| key        | TEXT | NOT NULL — max 256 chars           |
+| value      | TEXT | NOT NULL — max 100,000 chars       |
+| updated_by | TEXT | NOT NULL                           |
+| updated_at | TEXT | NOT NULL DEFAULT `datetime('now')` |
+| expires_at | TEXT | NULL                               |
+
+**PK**: `(namespace, key)`. **Indexes**: `idx_state_namespace(namespace)`, `idx_state_expires(expires_at) WHERE expires_at IS NOT NULL`
+
+### feed_events
+
+| Column     | Type    | Constraints                        |
+| ---------- | ------- | ---------------------------------- |
+| id         | INTEGER | PK AUTOINCREMENT                   |
+| agent_id   | TEXT    | NULL                               |
+| type       | TEXT    | NOT NULL                           |
+| target     | TEXT    | NULL — max 256 chars               |
+| preview    | TEXT    | NULL — max 500 chars               |
+| created_at | TEXT    | NOT NULL DEFAULT `datetime('now')` |
+
+**Indexes**: `idx_feed_events_agent`, `idx_feed_events_type`, `idx_feed_events_created`
+
+### thread_branches
+
+| Column            | Type    | Constraints                         |
+| ----------------- | ------- | ----------------------------------- |
+| id                | INTEGER | PK AUTOINCREMENT                    |
+| parent_message_id | INTEGER | FK → messages(id) ON DELETE CASCADE |
+| name              | TEXT    | NULL — 1-128 chars                  |
+| created_by        | TEXT    | NULL                                |
+| created_at        | TEXT    | NOT NULL DEFAULT `datetime('now')`  |
+
+**Index**: `idx_thread_branches_parent(parent_message_id)`
+
+---
+
+## 4. Agent Lifecycle
+
+### Registration
+
+- Agent sends `POST /api/agents` with `{name, capabilities?, metadata?, skills?, channels?}`
+- Name must match `/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,62}[a-zA-Z0-9]$/`, `human` reserved
+- Max 20 capabilities, max 10K chars metadata JSON
+- If name exists and is **not offline** → `409 Conflict`
+- If name exists and is **offline** → reactivates: updates caps/metadata/skills, status→online
+- If new → inserts with UUID, status=online
+- Optional `channels` array → auto-joins those channels on registration
+- Returns agent object + `joined_channels` if channels were specified
+
+### Heartbeat
+
+- `PUT /api/agents/:id/heartbeat` with optional `{status_text}`
+- Updates `last_heartbeat`, sets status to `online`
+- Status text: max 256 chars, no control chars, nullable
+- Only works on non-offline agents (404 if offline)
+- **Auto-heartbeat (CLI)**: Triggered by commands: `agents`, `discover`, `send`, `broadcast`, `channels`, `channel`, `create-channel`, `read-status`, `thread`, `state set`, `state get`
+- **Auto-heartbeat (MCP)**: Every tool call triggers heartbeat + 60s periodic timer
+- **Auto-heartbeat** always sends `status_text: "active"`, best-effort (errors swallowed)
+
+### Status Transitions
+
+```
+online ──(90s no heartbeat)──→ idle
+idle   ──(300s total no heartbeat)──→ offline
+online ──(heartbeat OK but 10min no activity)──→ idle (stuck detection)
+offline ──(re-register or heartbeat)──→ online
+```
+
+### Reaper
+
+- Runs every 30 seconds (`setInterval` with `.unref()`)
+- Phase 1: online → idle after 90s no heartbeat
+- Phase 2: idle/online → offline after 300s no heartbeat
+- Phase 3: online with heartbeat but `last_activity` > 10min → idle (stuck)
+- Never reaps `human` agent
+- Disable with `OFFLINE_TIMEOUT=0` env → all agents reactivated on startup
+- On startup: agents with heartbeat > 2min old → offline
+
+### Unregistration
+
+- `DELETE /api/agents/:id` → status = `offline`, emits `agent:offline`
+- No automatic unregistration anywhere in the system
+
+---
+
+## 5. Messaging System
+
+### Message Types
+
+| Type         | Routing                                          | Description                        |
+| ------------ | ------------------------------------------------ | ---------------------------------- |
+| Direct       | `from` → `to` (agent name or ID)                 | Private message between two agents |
+| Channel      | `from` → `channel_id`                            | Delivered to all channel members   |
+| Broadcast    | `from` → all online agents except sender         | Mass notification                  |
+| Thread reply | `from` → same target as parent, with `thread_id` | Grouped conversation               |
+
+### Message Properties
+
+- **content**: non-empty string, max 50,000 chars, no null bytes
+- **importance**: `low` | `normal` | `high` | `urgent` (default: `normal`)
+- **ack_required**: boolean, enables acknowledgment tracking
+- **thread_id**: references parent message for threaded conversations
+- **branch_id**: references a thread branch for sub-conversations
+- **edited_at**: set when message content is updated
+
+### Sending Rules
+
+- Must specify either `to` (direct) or `channel` (channel), not both
+- Broadcast is a separate endpoint (`POST /api/messages/broadcast`)
+- If `thread_id` set, parent message must exist
+- Only sender can edit or delete their messages
+- Edit: updates `content` + `edited_at`
+- Delete: hard delete (removes from DB)
+
+### Read Tracking
+
+- Per-agent `read_at` timestamps in `message_reads`
+- Mark read: `POST /api/messages/:id/read` with `{agent_id}`
+- Only recipient (direct) or channel member can mark
+- Mark all read: `POST /api/agents/:id/read-all` — bulk marks all unread inbox
+- **CLI auto-mark-read**: `inbox`, `poll`, `thread` automatically mark returned messages as read
+- **Watch never marks read** — notification only
+
+### Acknowledgment
+
+- Messages with `ack_required: true` can be acknowledged separately from read
+- Ack: upserts `message_reads` with `acked_at` timestamp
+- Only recipient can acknowledge
+
+### Threading
+
+- Thread root: message with no `thread_id` (or is the root of a thread)
+- Thread replies: messages with `thread_id` pointing to root or another reply
+- Thread view: root + all replies ordered by `created_at`
+- Branches: named sub-threads off a parent message (via `thread_branches` table)
+
+### Search
+
+- FTS5 full-text search on message content
+- Returns: message + snippet + rank
+- Filters: channel, from agent; limit capped [1, 100]
+- Special FTS5 syntax stripped, words wrapped in quotes
+
+### Polling
+
+- Server-side long-poll: agent requests with timeout, server blocks until message arrives or timeout
+- **Double-cap**: REST caps timeout to [0, 60] seconds, domain caps to [0, 60000] ms — both consistent at 60s max
+- Client loops in chunks (55s) for longer waits
+
+### Inbox
+
+- Direct messages to agent + messages from joined channels
+- Excludes self-sent messages
+- Filters: unread only, importance, limit [1, 500]
+
+---
+
+## 6. Channel System
+
+- **Name validation**: `/^[a-z0-9][a-z0-9._-]{0,62}[a-z0-9]$/` (lowercase, 3-64 chars)
+- **Create is idempotent**: if active channel with same name exists → returns existing; if archived → unarchives + updates description
+- Creator is auto-joined on create
+- **Join**: fails if channel archived, silently ignores duplicate membership
+- **Leave**: always succeeds, removes membership
+- **Archive**: sets `archived_at`, only creator can archive. Archived channels hidden from default list.
+- **Members**: ordered by `joined_at`
+- **Channel messages**: filter messages by `channel_id`, supports limit
+
+---
+
+## 7. Shared State
+
+Namespaced key-value store for inter-agent coordination.
+
+- **Namespace + key**: composite PK. Key max 256 chars, no control chars
+- **Value**: max 100,000 chars
+- **TTL**: optional `expires_at` — ISO timestamp. Lazy expiration sweep on read.
+- **CAS (compare-and-swap)**: transactional atomic operation
+  - Reads current value, compares to `expected` (null = key should not exist)
+  - If match: either deletes (if `new_value === ''`) or sets new value
+  - Returns `{ swapped: true/false, current? }`
+  - Used for file locks and coordination primitives
+- **UPSERT**: `ON CONFLICT DO UPDATE` — set creates or updates
+- **List**: filter by namespace and/or key prefix
+
+---
+
+## 8. Activity Feed
+
+Structured event log for observability.
+
+### Event Types
+
+| Type            | Trigger                                     | Color |
+| --------------- | ------------------------------------------- | ----- |
+| `register`      | Agent registration                          | —     |
+| `unregister`    | Agent going offline                         | —     |
+| `message`       | Every sent message (DM, channel, broadcast) | —     |
+| `state_change`  | State set/delete                            | —     |
+| `channel_join`  | Agent joins channel                         | —     |
+| `channel_leave` | Agent leaves channel                        | —     |
+| `commit`        | External (hook)                             | —     |
+| `test_pass`     | External                                    | —     |
+| `test_fail`     | External                                    | —     |
+| `file_edit`     | External                                    | —     |
+| `task_complete` | External                                    | —     |
+| `error`         | External                                    | —     |
+| `custom`        | External                                    | —     |
+| `handoff`       | External                                    | —     |
+| `branch`        | External                                    | —     |
+| `hook-block`    | File coordination hook blocking an edit     | —     |
+
+### Rules
+
+- **Heartbeats are NOT logged** — meaningful events only
+- Preview truncated to 500 chars, target to 256 chars
+- External systems can POST custom events via `POST /api/feed`
+- Query: filter by agent, type, since; limit [1, 500], default 50
+
+---
+
+## 9. Rate Limiting
+
+- **Algorithm**: Token bucket, in-memory, per-agent
+- **Burst capacity**: 10 tokens
+- **Refill rate**: 1 token/second (60/min sustained)
+- **Scope**: `comm_send`, channel create/join/archive, state set/delete/cas
+- **Error**: `429 Rate Limited` when tokens exhausted
+- New agents start with full bucket (10 tokens)
+
+---
+
+## 10. CLI Specification (`ac`)
+
+Python CLI, stdlib only (urllib, json, argparse). Identity from `COMM_USER` env var.
+
+### Config
+
+- File: `~/.agent-comm/config.sh` — shell-style `KEY=VALUE` (supports quotes, `#` comments)
+- Keys: `COMM_HOST`, `COMM_PORT` only
+- Env vars override config file
+- Defaults: `COMM_HOST=cislo5.lan`, `COMM_PORT=3420`
+- Config must NOT contain agent name (shared by multiple agents on one host)
+
+### Cross-Cutting Behaviors
+
+**Auto-heartbeat**: These commands send heartbeat before executing:
+`agents`, `discover`, `send`, `broadcast`, `channels`, `channel`, `create-channel`, `read-status`, `thread`, `state set`, `state get`
+
+**Auto-mark-read**: These commands mark returned messages as read:
+`inbox`, `poll`, `thread`
+
+**Auto-register**: Global `--auto-register` flag — registers before first command that needs COMM_USER. Idempotent (returns existing if already registered). Guard prevents recursion.
+
+### Agent Lifecycle Commands
+
+| Command      | Args/Flags               | Endpoint                        | Behavior                                  |
+| ------------ | ------------------------ | ------------------------------- | ----------------------------------------- |
+| `register`   | `--caps STR` (comma-sep) | `POST /api/agents`              | Register with capabilities                |
+| `unregister` | —                        | `DELETE /api/agents/:id`        | Set status offline                        |
+| `heartbeat`  | `--status STR`           | `PUT /api/agents/:id/heartbeat` | Manual heartbeat with status text         |
+| `agents`     | —                        | `GET /api/agents`               | List all agents (auto-heartbeat)          |
+| `discover`   | `--skill`, `--tag`       | `GET /api/agents/discover`      | Find agents by skill/tag (auto-heartbeat) |
+
+### Messaging Commands
+
+| Command               | Args/Flags                              | Endpoint                            | Behavior                                                     |
+| --------------------- | --------------------------------------- | ----------------------------------- | ------------------------------------------------------------ |
+| `send TO CONTENT`     | `--importance`, `--thread ID`           | `POST /api/messages`                | Send DM or channel msg. `TO` prefix `channel:` → channel msg |
+| `broadcast CONTENT`   | `--importance`                          | `POST /api/messages/broadcast`      | Send to all online agents                                    |
+| `inbox`               | `--unread`                              | `GET /api/agents/:id/inbox`         | Check inbox (auto-mark-read)                                 |
+| `poll`                | `--timeout 60`, `--all`, `--force`      | `GET /api/agents/:id/poll`          | Block until message (auto-mark-read, flock)                  |
+| `watch`               | `--interval 60`, `--debug`              | `GET inbox` (periodic)              | Background listener (never marks read, flock)                |
+| `ask TO CONTENT`      | `--timeout 120`                         | send + poll loop                    | Send + wait for reply. Checks target online first.           |
+| `wait-replies`        | `--count N` (required), `--timeout 120` | poll loop                           | Collect N distinct sender replies                            |
+| `mark-read ID`        | —                                       | `POST /api/messages/:id/read`       | Mark single message                                          |
+| `read-all`            | —                                       | `POST /api/agents/:id/read-all`     | Mark all inbox as read                                       |
+| `msg-edit ID CONTENT` | —                                       | `PATCH /api/messages/:id`           | Edit own message                                             |
+| `msg-delete ID`       | —                                       | `DELETE /api/messages/:id`          | Delete own message                                           |
+| `read-status ID`      | —                                       | `GET /api/messages/:id/read-status` | Who read this message                                        |
+| `thread ID`           | —                                       | `GET /api/messages/:id/thread`      | Full thread (auto-mark-read)                                 |
+
+### Channel Commands
+
+| Command               | Args/Flags   | Endpoint                         | Behavior                                  |
+| --------------------- | ------------ | -------------------------------- | ----------------------------------------- |
+| `channels`            | —            | `GET /api/channels`              | List all channels (auto-heartbeat)        |
+| `channel NAME`        | —            | `GET /api/channels/:name`        | Channel detail (auto-heartbeat)           |
+| `join CHANNEL`        | —            | `POST /api/channels/:name/join`  | Join channel (auto-creates if not exists) |
+| `leave CHANNEL`       | —            | `POST /api/channels/:name/leave` | Leave channel                             |
+| `create-channel NAME` | `--desc STR` | `POST /api/channels`             | Create channel (auto-heartbeat)           |
+
+### State Commands
+
+| Command                  | Args/Flags      | Endpoint                                                   | Behavior                           |
+| ------------------------ | --------------- | ---------------------------------------------------------- | ---------------------------------- |
+| `state set NS KEY VALUE` | `--ttl SECONDS` | `POST /api/state/:ns/:key`                                 | Set state value (auto-heartbeat)   |
+| `state get NS`           | `[KEY]`         | `GET /api/state/:ns/:key` or `GET /api/state?namespace=NS` | Get value or list (auto-heartbeat) |
+| `state delete NS KEY`    | —               | `DELETE /api/state/:ns/:key`                               | Delete state entry                 |
+
+### Monitoring Commands
+
+| Command    | Args/Flags                        | Endpoint            | Behavior                                  |
+| ---------- | --------------------------------- | ------------------- | ----------------------------------------- |
+| `health`   | —                                 | `GET /health`       | Server health check (no COMM_USER needed) |
+| `feed`     | `--agent`, `--type`, `--limit 20` | `GET /api/feed`     | Activity feed (no COMM_USER needed)       |
+| `stuck`    | —                                 | `GET /api/stuck`    | Show stuck agents (no COMM_USER needed)   |
+| `overview` | —                                 | `GET /api/overview` | System overview (no COMM_USER needed)     |
+
+### Output Format
+
+- All commands: `json.dumps(data, indent=2, ensure_ascii=False)` to stdout
+- `204 No Content`: nothing printed
+- `watch`: one-line per message — `[MSG] ts=HH:MM:SS id=N from=Name [channel=Ch]: content`
+- Errors: stderr + exit code 1
+
+### Error Format (stderr)
+
+| Condition          | Message                                                                                               |
+| ------------------ | ----------------------------------------------------------------------------------------------------- |
+| HTTP error         | `Error {code}: {message}`                                                                             |
+| Connection failed  | `Connection failed: {reason}`                                                                         |
+| Timeout            | `Error: request timed out`                                                                            |
+| COMM_USER missing  | `Error: COMM_USER not set`                                                                            |
+| Poll lock conflict | `Error: agent X already has an active poll (PID N). Fix: wait for it, kill it, or use --force`        |
+| Poll timeout       | `Error: poll timed out after Ns with no messages. This is normal — start a new poll to keep waiting.` |
+| Ask timeout        | `No reply received (timeout)`                                                                         |
+| Ask target offline | `Error: agent "X" is offline (status: Y)`                                                             |
+
+### Watch — Detailed Behavior
+
+**Purpose**: Background notification listener. Never marks read. Never exits.
+
+**Startup**:
+
+1. Acquire flock on `~/.agent-comm/locks/<name>.poll.lock` (no force — fails if poll running)
+2. Install SIGTERM/SIGINT handlers → save state + release lock + `os._exit(0)`
+3. Fetch agent list → build name map
+4. Load `last_seen_id` from `~/.agent-comm/state/<name>.watch.state`
+5. Fetch unread inbox (`?unread=true&limit=200`)
+6. Filter: exclude self-messages, exclude `id <= last_seen_id`, sort ascending
+7. Display based on count: 0=silent, 1-10=all, 11-20=all with header, >20=first 20 + warning
+8. Print `[WATCH] Listening...`
+
+**Main loop**:
+
+```
+forever:
+  sleep(interval)  // default 60s, zero CPU
+  every 10 cycles: refresh name map
+  fetch unread inbox (?unread=true&limit=200)
+  on failure: increment counter, log every 10th, continue
+  on success after failures: reset counter
+  filter: exclude self + id <= last_seen_id
+  emit new messages, update last_seen_id, save state (atomic rename)
+```
+
+**State file**: `~/.agent-comm/state/<name>.watch.state` — single integer, atomic write via tmp+rename
+
+### Poll — Detailed Behavior
+
+- Acquires same flock as watch (mutual exclusion)
+- Supports `--force`: reads PID from lock, sends SIGTERM, polls up to 3s for death
+- Server-side long-poll in 55s chunks, client loops
+- Auto-marks returned messages as read
+- SIGTERM handler: release lock + `os._exit(1)`
+
+### Poll Lock (fcntl.flock)
+
+- **File**: `~/.agent-comm/locks/<name>.poll.lock`
+- **Mechanism**: `fcntl.flock(fd, LOCK_EX | LOCK_NB)` — non-blocking exclusive
+- Kernel-guaranteed atomic, auto-released on any process death (even SIGKILL)
+- Shared by poll and watch — agent runs exactly one at a time
+- **Never delete lock files manually** — kill the process instead
+
+---
+
+## 11. Web UI Specification
+
+### Architecture
+
+- **Rendering**: Client-side, vanilla JS, no framework. morphdom for DOM patching.
+- **Fingerprint skip**: `quickFingerprint()` hashes state — skips re-render if unchanged.
+- **Full state on connect**: WebSocket sends complete snapshot on connect, then incremental deltas.
+- **File structure**: IIFE modules attaching to `window.AC` namespace. No ES modules, no bundler.
+- **Plugin support**: `AC.mount(container)` for embedding in shadow DOM (agent-desk integration).
+- **Theme sync**: `postMessage({ type: 'theme-sync', colors })` from parent frame.
+- **Libraries**: marked (Markdown), DOMPurify (XSS), morphdom (DOM diffing)
+
+### Views
+
+| View     | Hash        | Content                                                                                                                                                                                                |
+| -------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Overview | `#overview` | 4 stat cards (agents online, channels, messages, state entries), active agents panel, recent activity (last 15 msgs), cleanup + refresh buttons                                                        |
+| Agents   | `#agents`   | Card grid: status dot, name, status text, heartbeat freshness, capabilities tags, skill pills, message count. Click → filter messages. "Message" button → compose.                                     |
+| Messages | `#messages` | Split pane. Left: search bar, filter chips, message list (avatar, from→to, time, preview, importance badge). Right: message detail (markdown, read status, thread, branches, reply/mark-read buttons). |
+| Channels | `#channels` | Card grid: name, description, message count, archived badge. "New channel" button. Click → filter messages.                                                                                            |
+| State    | `#state`    | Read-only table: namespace, key, value (truncated), updated by, updated at. Client-side filter.                                                                                                        |
+| Feed     | `#feed`     | Timeline: type icon, agent, time, target, preview. Type filter dropdown. Infinite scroll.                                                                                                              |
+
+### Human Communication
+
+- **Compose modal**: toggle Agent/Channel, agent dropdown (excludes self), channel dropdown, priority selector, thread ID support
+- Sends via `POST /api/messages/human` (server routes as from human agent)
+- Ctrl+Enter to send, Escape to close
+- **Reply**: from message detail, pre-fills compose with agent + thread
+- **No broadcast, no forward** in UI (CLI-only features)
+
+### Real-Time Updates
+
+- WebSocket events: `agent:registered/updated/offline`, `message:sent/read/acked`, `channel:created/archived/member_joined/member_left`, `state:changed/deleted`
+- Toast notifications for agent joins/leaves and new messages
+- Human heartbeat: `POST /api/human/heartbeat` every 30s while dashboard open
+- Auto-reconnect after 3s on disconnect
+
+### Human Agent
+
+- Auto-registered as `human` when dashboard opens
+- Visible in `agents` list when online
+- Never reaped by reaper
+- Has full authority — can see all messages, trigger cleanup, clear all messages
+
+### UI Limitations (vs CLI/MCP)
+
+| Feature                     | Available                   |
+| --------------------------- | --------------------------- |
+| Broadcast messages          | ❌                          |
+| Forward messages            | ❌                          |
+| State editing               | ❌ (read-only)              |
+| Channel join/leave/archive  | ❌ (create only)            |
+| Agent unregister            | ❌                          |
+| Per-message delete          | ❌ (clear all only)         |
+| Skill-based agent discovery | ❌                          |
+| Branch detail view          | ❌                          |
+| Acknowledge messages        | ❌ (badge shown, no action) |
+| Export data                 | ❌                          |
+
+---
+
+## 12. REST API Reference
+
+### Health / Info
+
+| Method | Path            | Response                                                            |
+| ------ | --------------- | ------------------------------------------------------------------- |
+| GET    | `/health`       | `{ status, version, uptime, agents }`                               |
+| GET    | `/api/overview` | `{ agents, channels, recent_messages, state_entries, feed_events }` |
+| GET    | `/api/export`   | `{ exported_at, agents[], channels[], messages[], state[] }`        |
+
+### Agents
+
+| Method | Path                        | Body                                                   | Response                                                    | Errors                        |
+| ------ | --------------------------- | ------------------------------------------------------ | ----------------------------------------------------------- | ----------------------------- |
+| GET    | `/api/agents`               | —                                                      | `Agent[]`                                                   | —                             |
+| GET    | `/api/agents/discover`      | —                                                      | `Agent[]` (online)                                          | Query: `?skill=&tag=`         |
+| GET    | `/api/agents/:id`           | —                                                      | `Agent`                                                     | 404                           |
+| POST   | `/api/agents`               | `{name, capabilities?, metadata?, skills?, channels?}` | `{...agent, joined_channels}`                               | 400, 409                      |
+| DELETE | `/api/agents/:id`           | —                                                      | `{ ok: true }`                                              | 404                           |
+| GET    | `/api/agents/:id/heartbeat` | —                                                      | `{agent_id, name, status, status_text, heartbeat_age_ms/s}` | 404                           |
+| PUT    | `/api/agents/:id/heartbeat` | `{status_text?}`                                       | `{ok, agent_id, name}`                                      | 404                           |
+| GET    | `/api/agents/:id/inbox`     | —                                                      | `Message[]`                                                 | Query: `?unread=true&limit=N` |
+| GET    | `/api/agents/:id/poll`      | —                                                      | `Message[]` (blocking)                                      | Query: `?timeout=N&all=true`  |
+| POST   | `/api/agents/:id/messages`  | `{to?, channel?, content, thread_id?, importance?}`    | `Message`                                                   | 400, 403, 404                 |
+| POST   | `/api/agents/:id/read-all`  | —                                                      | `{ok, marked}`                                              | 404                           |
+| GET    | `/api/stuck`                | —                                                      | `Agent[]`                                                   | Query: `?threshold_minutes=N` |
+| POST   | `/api/human/heartbeat`      | —                                                      | `{ok, agent_id, name}`                                      | —                             |
+
+### Channels
+
+| Method | Path                           | Body                               | Response                  | Errors            |
+| ------ | ------------------------------ | ---------------------------------- | ------------------------- | ----------------- |
+| GET    | `/api/channels`                | —                                  | `Channel[]` (active)      | —                 |
+| POST   | `/api/channels`                | `{name, description?, created_by}` | `Channel`                 | 400, 500          |
+| GET    | `/api/channels/:name`          | —                                  | `{...channel, members[]}` | 404               |
+| GET    | `/api/channels/:name/members`  | —                                  | `ChannelMember[]`         | 404               |
+| POST   | `/api/channels/:name/join`     | `{agent_id}`                       | `{ok, channel}`           | 400, 404          |
+| POST   | `/api/channels/:name/leave`    | `{agent_id}`                       | `{ok}`                    | 400, 404          |
+| GET    | `/api/channels/:name/messages` | —                                  | `Message[]`               | Query: `?limit=N` |
+
+### Messages
+
+| Method | Path                            | Body                                                      | Response                  | Errors                             |
+| ------ | ------------------------------- | --------------------------------------------------------- | ------------------------- | ---------------------------------- |
+| GET    | `/api/messages`                 | —                                                         | `Message[]`               | Query: `?from=&to=&limit=&offset=` |
+| POST   | `/api/messages`                 | `{from, to?, channel?, content, thread_id?, importance?}` | `Message`                 | 400, 403, 404                      |
+| POST   | `/api/messages/human`           | `{to?, channel?, content}`                                | `Message`                 | 400                                |
+| POST   | `/api/messages/broadcast`       | `{from, content, importance?}`                            | `Message[]`               | 400, 403, 404                      |
+| GET    | `/api/messages/:id/thread`      | —                                                         | `Message[]`               | 400, 404                           |
+| GET    | `/api/messages/:id/read-status` | —                                                         | `{message_id, read_by[]}` | 400, 404                           |
+| PATCH  | `/api/messages/:id`             | `{agent_id, content}`                                     | `Message`                 | 400, 404                           |
+| DELETE | `/api/messages/:id`             | `{agent_id}`                                              | `{deleted: true}`         | 400, 404                           |
+| POST   | `/api/messages/:id/read`        | `{agent_id}`                                              | `{ok: true}`              | 400, 404                           |
+| DELETE | `/api/messages`                 | —                                                         | `{purged}`                | —                                  |
+
+### Search
+
+| Method | Path          | Response                     | Query                       |
+| ------ | ------------- | ---------------------------- | --------------------------- |
+| GET    | `/api/search` | `{message, snippet, rank}[]` | `?q=&channel=&from=&limit=` |
+
+### State
+
+| Method | Path                      | Body                                              | Response                    | Errors                       |
+| ------ | ------------------------- | ------------------------------------------------- | --------------------------- | ---------------------------- |
+| GET    | `/api/state`              | —                                                 | `StateEntry[]`              | Query: `?namespace=&prefix=` |
+| GET    | `/api/state/:ns/:key`     | —                                                 | `StateEntry`                | 404                          |
+| POST   | `/api/state/:ns/:key`     | `{value, updated_by, ttl_seconds?}`               | `StateEntry`                | 400                          |
+| DELETE | `/api/state/:ns/:key`     | —                                                 | `{deleted: true}`           | 404                          |
+| POST   | `/api/state/:ns/:key/cas` | `{expected, new_value, updated_by, ttl_seconds?}` | `{swapped: bool, current?}` | 400                          |
+
+### Feed
+
+| Method | Path        | Body                                | Response      | Query                                 |
+| ------ | ----------- | ----------------------------------- | ------------- | ------------------------------------- |
+| GET    | `/api/feed` | —                                   | `FeedEvent[]` | `?agent=&type=&since=&limit=&offset=` |
+| POST   | `/api/feed` | `{agent?, type, target?, preview?}` | `FeedEvent`   | 400                                   |
+
+### Branches
+
+| Method | Path                         | Response         | Query          |
+| ------ | ---------------------------- | ---------------- | -------------- |
+| GET    | `/api/branches`              | `ThreadBranch[]` | `?message_id=` |
+| GET    | `/api/branches/:id`          | `ThreadBranch`   | —              |
+| GET    | `/api/branches/:id/messages` | `Message[]`      | —              |
+
+### Cleanup
+
+| Method | Path                  | Response                                  |
+| ------ | --------------------- | ----------------------------------------- |
+| POST   | `/api/cleanup`        | `CleanupStats`                            |
+| POST   | `/api/cleanup/stale`  | `StaleCleanupStats`                       |
+| POST   | `/api/cleanup/full`   | `CleanupStats`                            |
+| POST   | `/api/cleanup/feed`   | `{feed_events}` (body: `{max_age_days?}`) |
+| DELETE | `/api/agents/offline` | `{purged}`                                |
+
+### Error Format
+
+All errors: `{ error: string, code?: string }` with HTTP status. Codes: `NOT_FOUND` (404), `CONFLICT` (409), `VALIDATION_ERROR` (422), `RATE_LIMITED` (429).
+
+---
+
+## 13. WebSocket Protocol
+
+### Connection
+
+1. Client connects to `ws[s]://{host}`
+2. Server sends full state: `{ type: "state", version, agents, channels, messages, messageCount, state, feed, branches }`
+3. Client renders all views, hides loading overlay
+
+### Events (server → client)
+
+| Event              | Data                                              | Effect                                |
+| ------------------ | ------------------------------------------------- | ------------------------------------- |
+| `agent:registered` | `{agent}`                                         | Upsert agent, toast "Agent joined"    |
+| `agent:updated`    | `{agentId, status?, capabilities?, status_text?}` | Update agent fields                   |
+| `agent:offline`    | `{agentId}`                                       | Set offline, toast "Agent left"       |
+| `message:sent`     | `{message}`                                       | Prepend message (cap 50 local), toast |
+| `channel:created`  | `{channel}`                                       | Upsert channel                        |
+| `channel:archived` | `{channelId}`                                     | Remove channel                        |
+| `state:changed`    | `{namespace, key, value, updated_by}`             | Upsert state entry                    |
+| `state:deleted`    | `{namespace, key?}`                               | Remove entry/namespace                |
+
+### Client → Server
+
+- `{ type: "refresh" }` — request full state snapshot
+- `{ type: "subscribe", events: [...] }` — filter events (documented, not actively used)
+
+### Delta Sync (fingerprints)
+
+Per-category fingerprints detect changes:
+
+- `agents`: count + max(registered_at) + concatenated statuses
+- `messages`: max(id) + count
+- `channels`: count + max(created_at) + member count
+- `state`: count + max(rowid) + max(updated_at)
+- `feed`: max(id)
+- `branches`: count + max(id)
+
+Server periodically checks fingerprints → sends delta for changed categories only.
+
+---
+
+## 14. Configuration
+
+### Server Environment Variables
+
+| Variable                         | Default                | Description                                          |
+| -------------------------------- | ---------------------- | ---------------------------------------------------- |
+| `AGENT_COMM_PORT`                | `3421`                 | HTTP server port (prod: 3420 via Docker)             |
+| `AGENT_COMM_DB`                  | `./data/agent-comm.db` | SQLite database path                                 |
+| `AGENT_COMM_RETENTION_DAYS`      | `7`                    | Message/agent retention (clamped 1-365)              |
+| `AGENT_COMM_FEED_RETENTION_DAYS` | `30`                   | Feed event retention (clamped 1-3650)                |
+| `OFFLINE_TIMEOUT`                | `300`                  | Seconds before agent → offline. `0` = disable reaper |
+
+### CLI Config
+
+- File: `~/.agent-comm/config.sh`
+- Format: `KEY=VALUE` (shell-style, supports `"quotes"`, `# comments`)
+- Keys: `COMM_HOST`, `COMM_PORT` only
+- Env vars override file
+- Defaults: `cislo5.lan:3420`
+
+### CLI File Layout
+
+```
+~/.agent-comm/
+├── config.sh                      # Host + port config
+├── locks/<name>.poll.lock         # Poll/watch flock files
+├── state/<name>.watch.state       # Watch last_seen_id persistence
+└── agent-comm.db                  # Production DB (Docker bind mount)
+```
+
+---
+
+## 15. Cleanup & Retention
+
+### Automatic Cleanup
+
+- Runs on configurable interval
+- Deletes: offline agents older than retention, messages older than retention, orphaned reads, archived channels older than retention, expired state entries, old feed events
+
+### Manual Cleanup
+
+| Action         | Effect                                                                             |
+| -------------- | ---------------------------------------------------------------------------------- |
+| Stale          | Remove offline agents >1hr + their messages/reads/memberships/empty channels/state |
+| Full           | Wipe all tables (nuclear)                                                          |
+| Feed           | Delete feed events older than N days                                               |
+| Purge messages | Delete all messages + reads                                                        |
+| Purge offline  | Delete offline agents >1hr                                                         |
+
+### Retention Defaults
+
+- Messages: 7 days
+- Feed events: 30 days
+- Offline agents: 1 hour (purge threshold)
+- All configurable via env vars
+
+---
+
+## 16. Security Model
+
+- **LAN-only**: No public exposure, no TLS required
+- **No authentication**: Trusted network, all agents known
+- **Rate limiting**: Token bucket per agent (10 burst, 1/sec)
+- **Input validation**: Name patterns, content length caps, no null bytes, no control chars in status text
+- **CORS**: `Access-Control-Allow-Origin: *` on all responses
+- **XSS protection**: DOMPurify on all rendered markdown in UI
+- **No encryption**: Messages stored in plaintext in SQLite
+- **Reserved name**: `human` cannot be used by agents
+- **Edit/delete ownership**: Only sender can edit/delete their messages
+- **Read ownership**: Only recipient or channel member can mark read
+
+---
+
+## 17. Known Issues & TODO
+
+### Critical
+
+- [ ] **Every agent API request must send heartbeat** — currently only specific commands auto-heartbeat. `watch` and other API-calling commands should heartbeat on every request.
+
+### Known Limitations
+
+- **Poll timeout double-cap**: REST + domain both cap at 60s. To extend beyond, both must be changed.
+- **`wait-replies` has no lock protection**: Uses `_poll_req()` directly, not `self.poll()`, so concurrent poll is possible.
+- **`ask` reply matching uses names not IDs**: Compares `from_agent` to name string, not UUID.
+- **WebUI missing features**: No broadcast, forward, state editing, channel management, per-message delete, agent unregister, skill discovery.
+
+### Backlog
+
+- [ ] Extend poll timeout beyond 60s (requires REST + domain changes)
+- [ ] Add lock protection to `wait-replies`
+- [ ] WebUI: broadcast, forward, state editing, channel join/leave/archive
+- [ ] WebUI: per-message delete, agent unregister
+- [ ] WebUI: skill-based agent discovery
