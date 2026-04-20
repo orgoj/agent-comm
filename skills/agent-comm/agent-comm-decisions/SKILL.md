@@ -71,6 +71,13 @@ Heartbeat events must NOT be logged to the activity feed. Feed is for meaningful
 - No cron, no webhook, no background process
 - One long-running session, poll loop inside it — NOT new session per message
 
+## PRD
+
+- `PRD.md` in repo root is the single source of truth for the system specification
+- 17 sections covering data model, agent lifecycle, messaging, channels, state, feed, rate limiting, CLI spec, REST API, WebSocket protocol, WebUI, config, security
+- Reverse-engineered from source code — update PRD when changing behavior
+- Future phases (NOT for MVP): DB migrations, perf/scaling limits, authorization, crash recovery, deployment
+
 ## Fork Rules
 
 - This is a fork — **never remove** existing features, only add
