@@ -18,6 +18,7 @@ import urllib.parse
 import argparse
 import signal
 import fcntl
+import time
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
@@ -25,6 +26,15 @@ CONFIG_PATH = os.path.expanduser("~/.agent-comm/config.sh")
 TIMEOUT = 10       # default HTTP timeout (seconds)
 POLL_TIMEOUT = 3605  # max poll wait — loops in 55s chunks, up to 1h
 LOCK_DIR = os.path.expanduser("~/.agent-comm/locks")
+
+# ── Debug ────────────────────────────────────────────────────────────────────
+DEBUG = False
+
+def _dbg(msg):
+    if DEBUG:
+        ts = time.strftime("%H:%M:%S")
+        print(f"[watch:dbg {ts}] {msg}", file=sys.stderr)
+        sys.stderr.flush()
 
 
 # ── Poll Lock (fcntl.flock — kernel-guaranteed atomic, auto-cleanup on death) ──
@@ -165,20 +175,27 @@ class Client:
             sys.exit(1)
 
     def _poll_req(self, path: str, timeout: int) -> object | None:
-        """Like _req but returns None on timeout instead of exiting.
+        """Like _req but returns None on timeout/error instead of exiting.
         Used by poll loops that need to survive individual chunk timeouts."""
         url = f"{self.base}{path}"
+        _dbg(f"GET {url} (timeout={timeout}s)")
         req = urllib.request.Request(url, method="GET")
         req.add_header("Content-Type", "application/json")
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if resp.status == 204:
+                    _dbg("204 No Content — no messages")
                     return None
                 raw = resp.read().decode()
-                return json.loads(raw) if raw else None
-        except (TimeoutError, urllib.error.URLError):
+                data = json.loads(raw) if raw else None
+                _dbg(f"got {len(data) if isinstance(data, list) else 1} item(s)")
+                return data
+        except (TimeoutError, urllib.error.URLError) as e:
+            _dbg(f"poll timeout/connection error: {e}")
             return None
-        except Exception:
+        except Exception as e:
+            print(f"[watch] unexpected error in _poll_req: {e}", file=sys.stderr)
+            sys.stderr.flush()
             return None
 
     # ── Helpers ──────────────────────────────────────────────────────────────
@@ -352,75 +369,202 @@ class Client:
         finally:
             _lock_release(lock_fd)
 
-    def watch(self, timeout=300, all_=False, force=False):
-        """Continuous message listener. Loops forever, prints one line per message.
-        Format: [MSG] id=N from=Agent [channel=Ch]: first line of content
-        NEVER marks messages as read — watch is notification only.
-        On startup, dumps all unread messages. Then tracks last_seen_id
-        to only show new messages.
-        Protected by fcntl.flock — one watch per agent."""
-        import time
+    def watch(self, interval=60):
+        """Background notification listener. Periodically checks for unread messages,
+        prints one line per new message. Never marks anything as read.
+        Never exits (until killed). Zero CPU when sleeping.
+        
+        Agent runs EITHER watch OR poll — never both. Watch is for live notification,
+        poll is for actually reading messages. They share a lock to enforce this.
+        
+        How it works:
+        - Fetches unread inbox periodically (every N seconds)
+        - Filters out self-messages and already-emitted (id <= last_seen_id)
+        - Prints one-line notification per new message
+        - Saves last_seen_id to state file (survives restarts)
+        - Sleeps until next cycle
+        
+        Startup behavior:
+        - If <=10 unread messages → show all, proceed normally
+        - If >10 unread → show up to 20, print warning with total count,
+          tell agent to read/process messages before relying on watch
+        """
 
         self._need_user()
         aid = self._resolve(self.user)
 
-        lock_fd = _lock_acquire(self.user, force=force)
+        lock_fd = _lock_acquire(self.user, force=False)
+        _dbg("lock acquired")
 
+        # Signal handler: save state then exit
         def _cleanup(*_args):
+            # Cannot call _dbg here — reentrant write risk
+            try:
+                tmp = state_file + ".tmp"
+                with open(tmp, "w") as sf:
+                    sf.write(str(last_seen_id))
+                os.rename(tmp, state_file)
+            except Exception:
+                pass
             try:
                 _lock_release(lock_fd)
             except Exception:
                 pass
-            os._exit(1)
+            os._exit(0)
         signal.signal(signal.SIGTERM, _cleanup)
         signal.signal(signal.SIGINT, _cleanup)
 
         try:
-            # Build agent name cache for resolving sender IDs
-            agents_raw = self._req("GET", "/api/agents")
+            # Name resolution cache
             name_map = {}
-            if isinstance(agents_raw, list):
-                for a in agents_raw:
-                    name_map[a.get("id", "")] = a.get("name", a.get("id", ""))
+            cycle_count = 0
+
+            def _refresh_name_map():
+                nonlocal name_map
+                agents_raw = self._poll_req("/api/agents", timeout=10)
+                if agents_raw and isinstance(agents_raw, list):
+                    name_map.clear()
+                    for a in agents_raw:
+                        name_map[a.get("id", "")] = a.get("name", a.get("id", ""))
+                    _dbg(f"name_map: {len(name_map)} agents")
+                else:
+                    _dbg("name_map refresh failed")
+
+            _refresh_name_map()
 
             def _print_msg(m):
                 mid = m.get("id", "?")
                 from_id = m.get("from_agent", "")
                 from_name = name_map.get(from_id, from_id[:8]) if from_id else "?"
+                ts = time.strftime("%H:%M:%S")
                 ch = m.get("channel_id") or m.get("channel_name")
                 content = (m.get("content") or "").replace("\n", " ")[:120]
-                parts = [f"[MSG] id={mid} from={from_name}"]
+                parts = [f"[MSG] ts={ts} id={mid} from={from_name}"]
                 if ch:
                     parts.append(f"channel={ch}")
                 line = " ".join(parts) + f": {content}"
                 sys.stdout.write(line + "\n")
                 sys.stdout.flush()
-                return mid
+                _dbg(f"emitted msg id={mid}")
 
-            # On startup: dump all unread messages
+            # State file: last_seen_id for dedup across restarts
+            state_dir = os.path.join(os.path.expanduser("~"), ".agent-comm", "state")
+            os.makedirs(state_dir, exist_ok=True)
+            state_file = os.path.join(state_dir, f"{self.user}.watch.state")
             last_seen_id = 0
-            inbox_params = f"unread=true&limit=100"
-            existing = self._req("GET", f"/api/agents/{aid}/inbox?{inbox_params}")
-            if existing and isinstance(existing, list):
-                for m in existing:
-                    mid = _print_msg(m)
-                    last_seen_id = max(last_seen_id, mid)
+            try:
+                with open(state_file, "r") as sf:
+                    last_seen_id = int(sf.read().strip())
+                    _dbg(f"loaded last_seen_id={last_seen_id}")
+            except (FileNotFoundError, ValueError):
+                _dbg("no state file, starting from 0")
 
-            # Continuous loop: poll for new messages, filter by last_seen_id
+            def _save_state():
+                try:
+                    tmp = state_file + ".tmp"
+                    with open(tmp, "w") as sf:
+                        sf.write(str(last_seen_id))
+                    os.rename(tmp, state_file)
+                    _dbg(f"saved last_seen_id={last_seen_id}")
+                except Exception as e:
+                    _dbg(f"state save failed: {e}")
+
+            # ── Startup ─────────────────────────────────────────────────────
+            sys.stdout.write(f"[WATCH] Started for {self.user}, interval={interval}s\n")
+            sys.stdout.flush()
+
+            unread = self._poll_req(
+                f"/api/agents/{aid}/inbox?unread=true&limit=200", timeout=30)
+
+            if unread and isinstance(unread, list):
+                # Filter self-messages
+                foreign = [m for m in unread if m.get("from_agent") != aid]
+                # Filter already-seen
+                new_msgs = [m for m in foreign if m.get("id", 0) > last_seen_id]
+                # Sort ascending by id
+                new_msgs.sort(key=lambda m: m.get("id", 0))
+
+                _dbg(f"startup: {len(unread)} inbox, {len(foreign)} foreign, {len(new_msgs)} new")
+
+                if len(new_msgs) > 20:
+                    # Too many unread — agent must process first
+                    sys.stdout.write(
+                        f"[WATCH] WARNING: {len(new_msgs)} unread messages! "
+                        f"Showing first 20. Read and process your messages "
+                        f"before relying on watch.\n")
+                    sys.stdout.flush()
+                    for m in new_msgs[:20]:
+                        _print_msg(m)
+                    last_seen_id = new_msgs[-1].get("id", last_seen_id)
+                elif len(new_msgs) > 10:
+                    sys.stdout.write(
+                        f"[WATCH] {len(new_msgs)} unread messages (showing all)\n")
+                    sys.stdout.flush()
+                    for m in new_msgs:
+                        _print_msg(m)
+                    last_seen_id = new_msgs[-1].get("id", last_seen_id)
+                elif len(new_msgs) > 0:
+                    for m in new_msgs:
+                        _print_msg(m)
+                    last_seen_id = new_msgs[-1].get("id", last_seen_id)
+                else:
+                    _dbg("startup: no new unread messages")
+
+                _save_state()
+            else:
+                _dbg("startup: inbox empty or fetch failed")
+
+            sys.stdout.write("[WATCH] Listening...\n")
+            sys.stdout.flush()
+
+            # ── Main Loop ───────────────────────────────────────────────────
+            consecutive_failures = 0
+
             while True:
-                poll_sec = min(timeout, 55)
-                params = f"timeout={poll_sec}"
-                if all_:
-                    params += "&all=true"
-                msgs = self._poll_req(f"/api/agents/{aid}/poll?{params}",
-                                      timeout=poll_sec + 5)
-                if msgs and isinstance(msgs, list):
-                    for m in msgs:
-                        mid = m.get("id", 0)
-                        if mid > last_seen_id:
-                            _print_msg(m)
-                            last_seen_id = mid
+                time.sleep(interval)
+                cycle_count += 1
+
+                if cycle_count % 10 == 0:
+                    _refresh_name_map()
+
+                _dbg(f"cycle {cycle_count}: fetching unread")
+
+                unread = self._poll_req(
+                    f"/api/agents/{aid}/inbox?unread=true&limit=200", timeout=30)
+
+                if unread is None:
+                    consecutive_failures += 1
+                    if consecutive_failures == 1:
+                        _dbg("fetch failed, will retry")
+                    elif consecutive_failures % 10 == 0:
+                        _dbg(f"still failing ({consecutive_failures} attempts)")
+                    continue
+
+                if consecutive_failures > 0:
+                    _dbg(f"reconnected after {consecutive_failures} failures")
+                    consecutive_failures = 0
+
+                if not isinstance(unread, list) or len(unread) == 0:
+                    _dbg("no unread messages")
+                    continue
+
+                # Filter self + already-seen, sort ascending
+                new_msgs = [m for m in unread
+                            if m.get("from_agent") != aid
+                            and m.get("id", 0) > last_seen_id]
+                new_msgs.sort(key=lambda m: m.get("id", 0))
+
+                if new_msgs:
+                    _dbg(f"{len(new_msgs)} new messages")
+                    for m in new_msgs:
+                        _print_msg(m)
+                        last_seen_id = m.get("id", last_seen_id)
+                    _save_state()
+                else:
+                    _dbg(f"{len(unread)} unread but all self/seen")
+
         finally:
+            _dbg("releasing lock")
             _lock_release(lock_fd)
 
     def ask(self, to, content, timeout=120):
@@ -672,13 +816,11 @@ def main():
     ib = sub.add_parser("inbox", help="Check inbox (direct + channel)")
     ib.add_argument("--unread", action="store_true", help="Unread only")
 
-    wa = sub.add_parser("watch", help="Continuous message listener (one-line per msg, never exits)")
-    wa.add_argument("--timeout", type=int, default=300,
-                    help="Seconds per poll cycle (default 300)")
-    wa.add_argument("--all", action="store_true",
-                    help="Include already-read messages")
-    wa.add_argument("--force", action="store_true",
-                    help="Force start even if another poll is running")
+    wa = sub.add_parser("watch", help="Background notification listener (one-line per msg, never exits)")
+    wa.add_argument("--interval", type=int, default=60,
+                    help="Polling interval in seconds (default 60)")
+    wa.add_argument("--debug", action="store_true",
+                    help="Print detailed cycle info to stderr")
 
     po = sub.add_parser("poll", help="Block until new unread message arrives")
     po.add_argument("--timeout", type=int, default=60,
@@ -786,7 +928,9 @@ def main():
     elif cmd == "poll":
         output(c.poll(args.timeout, args.all, args.force))
     elif cmd == "watch":
-        c.watch(args.timeout, args.all, args.force)
+        global DEBUG
+        DEBUG = args.debug
+        c.watch(args.interval)
     elif cmd == "ask":
         result = c.ask(args.to, args.content, args.timeout)
         if result:
