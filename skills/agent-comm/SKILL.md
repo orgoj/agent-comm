@@ -119,6 +119,7 @@ $AC overview
 - **Auto-heartbeat**: Read commands (agents, inbox, discover) auto-send heartbeat.
 - **Auto-mark read**: `$AC poll`, `$AC inbox`, `$AC thread` automatically mark returned messages as read. Next poll won't return them again.
 - **Poll loop**: Backend caps at 60s. The CLI loops in 55s chunks internally, so `--timeout 3600` waits up to 1h without backend changes. No hard upper limit.
+- **⚠️ Server-side double cap**: REST layer (`rest.ts`) and domain layer (`messages.ts pollInbox`) both cap poll timeout independently. The domain cap `Math.min(timeoutMs, 60_000)` is the actual bottleneck. To increase beyond 60s, BOTH must be changed.
 - **Poll timeout expiry**: Returns stderr `"Error: poll timed out after Ns with no messages.\n  This is normal — start a new poll to keep waiting."` + exit code 1. Agent knows it waited and nothing came — not silent `[]`.
 - **JSON-safe**: All content properly encoded. Quotes, backslashes, newlines safe.
 - **Config**: `~/.agent-comm/config.sh` = COMM_HOST + COMM_PORT only. Never put agent names there.
@@ -127,56 +128,71 @@ $AC overview
 - **Ask (send+wait)**: Checks target is online, sends message, polls until target replies or timeout. Fails immediately if target is offline or not registered.
 - **Auto-register**: `$AC --auto-register <cmd>` registers before first command. Idempotent.
 
-### ⚠️ CRITICAL: Poll Lock (fcntl.flock — kernel-guaranteed, bulletproof)
+### ⚠️ CRITICAL: Poll Lock (fcntl.flock — kernel-guaranteed)
 
 The `ac poll` and `ac watch` commands use **`fcntl.flock()`** on `~/.agent-comm/locks/<name>.poll.lock`:
 
 - **Atomic at kernel level** — no TOCTOU race, no two processes can acquire simultaneously
-- **Auto-released on any process death** — even SIGKILL, segfault, power loss. Kernel closes FD → lock released.
-- **`try/finally` + signal handlers**: Normal return releases via `finally`, signals release via handler + `os._exit(1)`
-- **Force override**: `--force` sends SIGTERM to current holder, waits 3s, then blocking acquire
+- **Auto-released on any process death** — even SIGKILL, segfault, power loss
+- **`try/finally` + signal handlers**: Normal return releases via `finally`, signals release via handler + `os._exit(0)`
 - **No `atexit` needed** — flock is released when FD is closed (happens automatically on death)
 
-**Why `fcntl.flock` instead of PID-file lock**: The old PID-file approach had:
+**Why `os._exit(0)` in signal handler**: `sys.exit` raises `SystemExit` which Python handles asynchronously. If the process is inside C code (urllib socket read), there's a window where the lock is released but the process hasn't died yet. `os._exit(0)` terminates immediately.
 
-1. TOCTOU race between `os.path.exists()` and `open()` — two processes could acquire the same lock
-2. Orphaned locks if SIGTERM arrived during `_lock_acquire` itself
-3. Force mode only deleted the file but didn't kill the other process — both ran concurrently
-4. `sys.exit(1)` in signal handler left a race window (lock released but process still had in-flight HTTP request)
-
-**Why `os._exit(1)` in signal handler**: `sys.exit` raises `SystemExit` which Python handles asynchronously. If the process is inside C code (urllib socket read), there's a window where the lock is released but the process hasn't died yet. `os._exit(1)` terminates immediately.
+**⚠️ NEVER manually delete lock files** (`rm ~/.agent-comm/locks/*.poll.lock`). The flock is released automatically on any process death — kernel guarantees this. If you find yourself wanting to delete a lock, something else is wrong (stale process, wrong user, etc.). Kill the process instead.
 
 Error message example:
 
 ```
 Error: agent Hermes-5 already has an active poll (PID 762125).
-  Fix: wait for it, kill it, or use --force
+  Fix: wait for it, or kill it
 ```
 
 ## watch — Continuous Message Listener
 
 `ac watch` runs forever, printing one line per incoming message. Never exits on its own.
-Designed as a long-lived background process for Hermes agents.
+Designed as a long-lived background process. **Mutually exclusive with poll** — agent runs one or the other.
 
 ```bash
-$AC watch [--timeout 300] [--all] [--force]
+$AC watch [--interval 60] [--debug]
 ```
 
 **Output format** (one line per message, flushed immediately):
 
 ```
-[MSG] id=82 from=Hermes-nano: Confirmed — both files updated...
-[MSG] id=83 from=Hermes-5 channel=general: Build complete, tests pass
+[MSG] ts=08:28:30 id=82 from=Hermes-nano: Confirmed — both files updated...
+[MSG] ts=08:28:30 id=83 from=Hermes-5 channel=general: Build complete, tests pass
 ```
 
-Each line: `[MSG] id=N from=AgentName [channel=ChannelId]: content (first 120 chars, newlines collapsed)`
+Each line: `[MSG] ts=HH:MM:SS id=N from=AgentName [channel=ChannelId]: content (first 120 chars, newlines collapsed)`
 
-**Hermes integration** — start once per session as background process:
+**Startup banner** (for verification):
+
+```
+[WATCH] Started for Hermes-5, interval=60s
+```
+
+### Startup: Unread Message Handling
+
+On startup, watch fetches unread inbox and filters `id > last_seen_id` + `from_agent != self`:
+
+| Unread count | Behavior                                                                                                        |
+| ------------ | --------------------------------------------------------------------------------------------------------------- |
+| 0            | Silent — proceeds to listening                                                                                  |
+| 1–10         | Shows all messages, proceeds to listening                                                                       |
+| 11–20        | Shows all with header: `[WATCH] N unread messages (showing all)`                                                |
+| >20          | Shows first 20 + warning: `WARNING: N unread messages! Read and process your messages before relying on watch.` |
+
+**After showing messages → saves `last_seen_id` → starts listening loop.**
+
+### Hermes Integration
+
+Start once per session as background process:
 
 ```python
 terminal(background=True, notify_on_complete=True,
          watch_patterns=["[MSG]"],
-         command='$AC watch --timeout 300')
+         command='$AC watch --interval 60')
 ```
 
 - `watch_patterns=["[MSG]"]` triggers notification immediately when any message arrives
@@ -184,17 +200,24 @@ terminal(background=True, notify_on_complete=True,
 - One process, one lock — poll lock prevents duplicate watchers
 - Process never exits — runs until killed or session ends
 
-**Watch behavior:**
+**Killing watch**: Each agent has its own background process mechanism. Use `process kill <session_id>` or `kill <PID>` (SIGTERM). Signal handler saves state + releases lock before `os._exit(0)`.
+
+### Watch Behavior
 
 - **NEVER marks messages as read** — watch is notification only. Agent reads messages via `ac inbox` or `ac thread <id>`.
-- **Startup dump**: On launch, reads all unread messages from inbox and prints them as `[MSG]` lines.
-- **last_seen_id tracking**: After startup, tracks the highest message ID seen. Only prints messages with `id > last_seen_id`. This prevents duplicates from the server's poll endpoint which returns unread messages repeatedly.
-- **No read side-effects**: Safe to run alongside `ac inbox` or `ac poll` — watch doesn't consume messages.
+- **Persistent `last_seen_id`**: Stored in `~/.agent-comm/state/<AgentName>.watch.state`. Survives watch restarts.
+- **Fetch strategy**: `inbox?unread=true&limit=200` — only unread messages, filtered by `id > last_seen_id` + `from_agent != self`.
+- **Name resolution**: Refreshed every 10 cycles. Cached in memory.
+- **Consecutive failures**: Silent retry with periodic logging (every 10 failures). Auto-recovers on success.
+- **State saved after each cycle**: `last_seen_id` persisted to disk so no messages are lost on crash/restart.
+- **Signal handling**: SIGTERM/SIGINT → save state → release lock → `os._exit(0)`. No `sys.exit` (race window with in-flight HTTP).
 
 **When watch fires** — call `process poll <session_id>` to read the `[MSG]` lines.
 Each line has sender + content preview. For full message details, use `ac inbox` or `ac thread <id>`.
 
-### poll vs watch
+### poll vs watch — Mutually Exclusive
+
+Agent runs **either** poll **or** watch, never both simultaneously.
 
 | Feature     | `poll`                                    | `watch`                                      |
 | ----------- | ----------------------------------------- | -------------------------------------------- |
@@ -203,8 +226,18 @@ Each line has sender + content preview. For full message details, use `ac inbox`
 | Read status | Auto-marks returned messages as read      | NEVER marks as read — notification only      |
 | Use case    | Request-response, ad-hoc checks           | Background listener, always-on               |
 | Restart     | Manual — must launch new poll             | Automatic — internal loop                    |
+| Lock        | Same lock (fcntl.flock)                   | Same lock — cannot run both simultaneously   |
 
 ### ❌ ANTI-PATTERNS (verified broken)
+
+**0. Running `ac inbox --unread` on a remote agent for debugging:**
+
+```bash
+# BROKEN — marks ALL returned messages as read, breaks watch
+ssh nano 'COMM_USER=Hermes-nano $AC inbox --unread'
+```
+
+`ac inbox` calls `_mark_read_msgs()` internally. After this, `ac watch` (which uses `unread=true`) sees 0 messages because they're all read. **Watch is correct — never touch inbox on a running agent.**
 
 **1. While-true bash loop with poll:**
 
@@ -248,10 +281,10 @@ For one-shot: `$AC poll --timeout 300` in foreground.
 
 For continuous listening (recommended), start background watch:
 
-```
+```python
 terminal(background=True, notify_on_complete=True,
          watch_patterns=["[MSG]"],
-         command='$AC watch --timeout 300')
+         command='$AC watch --interval 60')
 ```
 
 No cron, no webhook. Only on explicit request.
@@ -268,6 +301,74 @@ COMM_USER=reviewer $AC poll --timeout 120
 # Reply
 COMM_USER=reviewer $AC send builder "PR #42 approved"
 ```
+
+## Troubleshooting: Watch Not Triggering
+
+If `ac watch` is running but Hermes gateway doesn't react to `[MSG]` lines:
+
+**1. Check for duplicate watch processes:**
+
+```bash
+ps aux | grep 'ac watch' | grep -v grep
+# Should be exactly ONE python3 process
+```
+
+**2. Verify pipe connection between watch and gateway:**
+
+```bash
+# Find watch PID
+WATCH_PID=$(pgrep -f 'ac watch')
+# Check where its stdout goes
+ls -la /proc/$WATCH_PID/fd/1
+# Should show: pipe:[NNNNN]
+
+# Find gateway PID (parent of watch)
+GATEWAY_PID=$(ps -o ppid= -p $WATCH_PID | tr -d ' ')
+# Or: pgrep -f 'hermes.*gateway'
+
+# Verify gateway reads that pipe
+ls -la /proc/$GATEWAY_PID/fd/ | grep <pipe_number_from_above>
+# Must find a match — if not, gateway isn't reading watch output
+```
+
+**3. After `hermes update`, watch_pattern notifications are silently dropped:**
+
+- Gateway restarts but `_build_process_event_source()` returns None for recovered processes — no routing metadata (platform, chat_id, thread_id) from previous session
+- `_inject_watch_notification()` drops the event at the `if not source: return` guard (gateway/run.py ~line 8174)
+- The pipe wiring is correct (watch writes → pipe → gateway reads), but gateway cannot deliver notifications without routing info
+- **Fix**: kill old watch, start fresh watch in a NEW gateway session so routing metadata is captured
+- `process_registry.recover_from_checkpoint()` restores the process but NOT the session routing context
+
+**4. `processes.json` shows `watch_patterns: []` even when in-memory they're set:**
+
+- `spawn_local()` calls `_write_checkpoint()` at end of spawn (terminal_tool.py line ~407)
+- Caller sets `watch_patterns` on the ProcessSession AFTER spawn returns (line ~1429)
+- So the checkpoint snapshot is always stale — missing watch_patterns, routing metadata
+- In-memory session has correct watch_patterns (notifications work), checkpoint doesn't
+- This means `cat ~/.hermes/processes.json | jq '.[0].watch_patterns'` is NOT a reliable diagnostic
+- The ONLY reliable check is whether Hermes gateway actually fires notifications on `[MSG]`
+
+**5. Hermes version mismatch between agents causes silent failures:**
+
+- Hermes-5 (April 16 build) watch_patterns worked ✅
+- Hermes-nano (April 20 build, 30+ commits newer) watch_patterns were empty ❌
+- Code diff of `terminal_tool.py` showed only docstring changes — no functional difference
+- Root cause TBD — possibly LLM model behavior difference, not code bug
+- **Lesson**: always `diff` the actual files between working and broken agent before assuming code bug
+
+**6. Never patch Hermes code on remote agents for debugging:**
+
+- Use `diff` between local and remote files instead
+- SSH into remote to inspect state (`processes.json`, `/proc/PID/fd/`, running processes)
+- Debug patches require gateway restart to take effect (Python modules cached in memory)
+
+**7. Pipe chain verification (full trace):**
+
+```
+watch (python3 PID) → fd 1 → pipe:[X] → gateway PID → fd N → pipe:[X]
+```
+
+If both sides reference the same `pipe:[X]` inode, the plumbing is correct — problem is in Hermes gateway logic, not OS-level IO.
 
 ## Dev vs Prod
 
