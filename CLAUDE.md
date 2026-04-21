@@ -35,8 +35,9 @@ src/
 
 - Version lives in `package.json` and is read at runtime (REST `/health`, WS state payload, UI sidebar)
 - Never hardcode version strings
-- Every commit must bump the patch version minimum
-- Commit message format: `v1.0.x: short description`
+- **Bump the version only on release** — ordinary commits leave `package.json` untouched
+- Commit message format (regular commits): short imperative subject, e.g. `fix: …`, `docs: …`, `feat: …`
+- Commit message format (release): `v1.x.y: short description` with the matching `package.json` bump in the same commit
 
 ## Build & Test
 
