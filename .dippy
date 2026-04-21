@@ -2,3 +2,5 @@ allow git add *
 allow git commit *
 allow npm run build
 allow npm test
+
+allow skills/agent-comm/scripts/ac *
