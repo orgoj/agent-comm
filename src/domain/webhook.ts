@@ -83,6 +83,14 @@ export class WebhookService {
     return row ? rowToSub(row) : null;
   }
 
+  private resolveAgentName(agentId: string | null): string | null {
+    if (!agentId) return null;
+    const row = this.db.queryOne<{ name: string }>('SELECT name FROM agents WHERE id = ?', [
+      agentId,
+    ]);
+    return row?.name ?? null;
+  }
+
   private onMessage(message: Message): void {
     const targets: string[] = [];
 
@@ -110,13 +118,18 @@ export class WebhookService {
   }
 
   private deliver(sub: WebhookSubscription, message: Message): void {
+    const fromName = this.resolveAgentName(message.from_agent);
+    const toName = this.resolveAgentName(message.to_agent);
+
     const payload = JSON.stringify({
       event: 'message:sent',
       timestamp: new Date().toISOString(),
       data: {
         id: message.id,
         from_agent: message.from_agent,
+        from_agent_name: fromName,
         to_agent: message.to_agent,
+        to_agent_name: toName,
         channel_id: message.channel_id,
         content: message.content,
         importance: message.importance,
@@ -136,7 +149,8 @@ export class WebhookService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Agent-Comm-Signature': `sha256=${sig}`,
+          'X-Hub-Signature-256': `sha256=${sig}`,
+          'X-GitHub-Event': 'message:sent',
         },
         timeout: 5000,
       };

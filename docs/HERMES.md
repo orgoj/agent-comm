@@ -316,67 +316,98 @@ Until hermes fixes the checkpoint issue:
 3. Use short intervals (10–30s) so messages aren't delayed too long
 4. Periodically trigger the agent (send it a message) to flush the completion_queue
 
-## 7. Alternative Approach: Webhook Delivery (Recommended)
+## 7. Webhook Delivery (Recommended)
 
-Instead of fixing the broken background process path, a completely different
-architecture is possible using hermes' built-in **webhook platform** with
-`deliver_only` mode.
+Uses Hermes' built-in **webhook platform** with dynamic subscriptions and `deliver_only` mode.
 
 ### How It Works
 
 Hermes has a generic webhook receiver (`gateway/platforms/webhook.py`) that
-runs an aiohttp HTTP server. Routes can be configured with `deliver_only: true`,
-which means the POST body IS the message — no LLM processing, zero cost,
-sub-second delivery directly to the agent's platform (telegram, discord, etc.).
+runs an aiohttp HTTP server. Dynamic subscriptions are created via
+`hermes webhook subscribe` and stored in `~/.hermes/webhook_subscriptions.json`.
+Routes with `deliver_only: true` deliver the POST body directly — no LLM
+processing, zero cost, sub-second delivery.
 
 ```
-agent-comm server  ──POST──>  hermes webhook :8644/webhook/agent-comm
+agent-comm server  ──POST──>  hermes webhook :8644/webhooks/<subscription-name>
                                 (deliver_only: true)
                                     │
                                     ▼
                               telegram/chat  →  agent sees message normally
 ```
 
-### Hermes Config
+### Setup
+
+**1. Enable webhook platform** in `~/.hermes/config.yaml`:
 
 ```yaml
-platforms:
-  webhook:
-    enabled: true
-    port: 8644
-    extra:
-      routes:
-        agent-comm:
-          secret: 'shared-hmac-secret'
-          deliver_only: true
-          deliver: telegram
-          deliver_extra:
-            chat_id: '7221629441'
-            thread_id: '14226'
+display:
+  platforms:
+    webhook:
+      enabled: true
+      extra:
+        host: '0.0.0.0'
+        port: 8644
+        secret: '<strong-global-secret>'
 ```
 
-### What Agent-Comm Needs
+Start gateway: `hermes gateway run`
 
-A **webhook notification** mechanism on the agent-comm server:
+**2. Create dynamic subscription** (Hermes generates the secret):
 
-1. **Subscription registration**: Agent (or user) registers a webhook URL per agent:
+```bash
+hermes webhook subscribe agent-comm-Hermes-5 \
+  --deliver telegram \
+  --deliver-chat-id "7221629441" \
+  --deliver-only \
+  --prompt "Message from {data.from_agent_name}: {data.content}"
+```
 
-   ```
-   POST /api/webhooks
-   { "agent": "Hermes-5", "url": "http://hermes-host:8644/webhook/agent-comm", "secret": "shared-hmac-secret" }
-   ```
+Returns URL (`http://localhost:8644/webhooks/agent-comm-hermes-5`) and secret.
 
-2. **Event delivery**: When a message arrives for a registered agent, agent-comm
-   POSTs the message to the webhook URL with HMAC signature:
+**3. Register with agent-comm** (pass Hermes-provided secret):
 
-   ```
-   POST /webhook/agent-comm
-   X-Hub-Signature-256: sha256=...
-   { "type": "message", "from": "Hermes-nano", "content": "Build complete", ... }
-   ```
+```bash
+COMM_USER=Hermes-5 $AC webhook register <URL_FROM_STEP_2> --secret <SECRET_FROM_STEP_2>
+```
 
-3. **Hermes receives** → validates HMAC → renders template → delivers to
-   platform (telegram) → agent sees it as a regular message → responds normally.
+### What Agent-Comm Sends
+
+Agent-comm POSTs to the registered URL with:
+
+- Header `X-Hub-Signature-256: sha256=<hex>` (HMAC-SHA256 signature)
+- Header `X-GitHub-Event: message:sent` (event type)
+- JSON body:
+
+```json
+{
+  "event": "message:sent",
+  "timestamp": "2026-04-21T12:00:00.000Z",
+  "data": {
+    "id": 42,
+    "from_agent": "agent-uuid",
+    "from_agent_name": "ac-developer",
+    "to_agent": "recipient-uuid",
+    "to_agent_name": "Hermes-5",
+    "channel_id": null,
+    "content": "message text",
+    "importance": "normal",
+    "created_at": "2026-04-21T12:00:00.000Z"
+  }
+}
+```
+
+Prompt templates use dot-notation: `{data.from_agent_name}`, `{data.content}`, `{data.importance}`.
+
+### Hermes Signature Validation
+
+Hermes webhook adapter (`gateway/platforms/webhook.py:559-588`) checks 3 headers:
+
+- `X-Hub-Signature-256: sha256=<hex>` — GitHub-style (used by agent-comm)
+- `X-Gitlab-Token: <plain secret>` — GitLab-style
+- `X-Webhook-Signature: <hex>` — generic
+
+Agent-comm uses `X-Hub-Signature-256` + `X-GitHub-Event: message:sent`.
 
 ### Advantages Over `ac watch`
 
@@ -401,14 +432,9 @@ A **webhook notification** mechanism on the agent-comm server:
 | **MCP**                     | Would need custom MCP server with push support |
 | **Skills**                  | Passive instructions, no event handling        |
 
-### Implementation Path
+### Implementation Status
 
-1. Add webhook subscription table to agent-comm DB (`agent_webhooks`: agent_id, url, secret)
-2. Add REST endpoint `POST /api/webhooks` (register), `DELETE /api/webhooks/:id` (unregister)
-3. Add event emitter in `messages.ts` — after `sendMessage()`, check if target agent has webhook → POST
-4. Add HMAC signing to webhook POST requests
-5. Document hermes webhook config for users
-6. `ac watch` becomes optional fallback (for agents without webhook support)
+Webhook delivery is implemented. See `src/domain/webhook.ts` (WebhookService) and `skills/agent-comm/references/hermes.md` for the agent-facing guide.
 
 ## 8. Reference
 
