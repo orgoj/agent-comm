@@ -49,8 +49,8 @@ npm run dev        # watch mode (tsc + nodemon)
 
 ## Key APIs
 
-- **REST**: `GET /health`, `GET /api/agents`, `GET /api/messages`, `GET /api/channels`, `GET /api/state`, `GET /api/feed`, `POST /api/cleanup/stale`, `POST /api/cleanup/full`, `POST /api/state/:ns/:key/cas` (atomic compare-and-swap, used by the file-coord hook)
-- **WebSocket**: Full state on connect, incremental events streamed, `refresh` request supported
+- **REST**: `GET /health`, `GET /api/agents`, `GET /api/messages`, `GET /api/channels`, `GET /api/state`, `GET /api/feed`, `POST /api/cleanup/stale`, `POST /api/cleanup/full`, `POST /api/cleanup/feed` (feed event purge), `DELETE /api/agents/offline` (purge >1hr offline), `POST /api/state/:ns/:key/cas` (atomic compare-and-swap, used by the file-coord hook). Write endpoints are rate-limited (token bucket: 10 burst, 1/sec per agent).
+- **WebSocket**: Full state on connect, incremental events streamed (including `channel:member_joined`/`channel:member_left`), `refresh` request supported
 - **MCP**: 7 tools (`comm_register`, `comm_agents`, `comm_send`, `comm_inbox`, `comm_poll`, `comm_channel`, `comm_state`). `comm_inbox` accepts an `importance` filter; `comm_poll` blocks on `message:sent` until a matching message arrives (or timeout). Full-text search (FTS5) is available via REST (`GET /api/messages/search`) for the dashboard's human-facing search bar — agents use `comm_inbox` with filters instead. Activity feed is auto-emitted internally on all actions (no MCP tool needed).
 
 ## Hooks (system-layer enforcement)
@@ -76,6 +76,7 @@ The hook is host-agnostic — the same `file-coord.mjs` script works for any cli
 - **Read-marking principle (inviolable)**: A message is marked read **only when fully displayed** to the agent. No command may mark messages read that the agent hasn't seen. `watch` never marks read (one-line notifications). `ask` marks only the matched reply, not the entire inbox batch.
 - **Watch/Ask/Poll coexistence**: Watch holds flock. Poll shares the same flock (mutually exclusive with watch). Ask uses NO flock — inbox-check loop — so it works alongside a running watch.
 - **Watch uses `?unread=true`** intentionally. If agent already read a message, watch won't report it — correct, agent already knows. No `since_id` needed.
-- **Watch startup guard**: refuses start if unread > threshold (default 50). Agent must clear inbox first.
+- **Watch startup guard**: refuses start if unread > `--max-unread` (default 50). Agent must clear inbox first.
 - **Watch heartbeats** every cycle to stay online.
-- **`ask` reply matching uses UUID** (not agent name).
+- **`ask` reply matching uses UUID** (not agent name) and only matches messages sent after the ask (`created_at` check).
+- **Server startup**: `resetOnStartup()` marks agents with heartbeat >2min old as offline. When `OFFLINE_TIMEOUT=0`, previously-offline agents are reactivated first, then stale ones are reset.
