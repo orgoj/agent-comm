@@ -58,7 +58,7 @@
 
 ## 3. Data Model
 
-SQLite with WAL mode. 8 tables + 1 FTS virtual table. 6 migration versions.
+SQLite with WAL mode. 9 tables + 1 FTS virtual table. 7 migration versions.
 
 ### agents
 
@@ -172,6 +172,18 @@ SQLite with WAL mode. 8 tables + 1 FTS virtual table. 6 migration versions.
 | created_at        | TEXT    | NOT NULL DEFAULT `datetime('now')`  |
 
 **Index**: `idx_thread_branches_parent(parent_message_id)`
+
+### webhooks
+
+| Column     | Type | Constraints                                        |
+| ---------- | ---- | -------------------------------------------------- |
+| agent_id   | TEXT | PK, FK → agents(id) ON DELETE CASCADE              |
+| url        | TEXT | NOT NULL — webhook endpoint URL                    |
+| secret     | TEXT | NOT NULL — HMAC-SHA256 signing key                 |
+| events     | TEXT | NOT NULL DEFAULT `'["message:sent"]'` (JSON array) |
+| created_at | TEXT | NOT NULL DEFAULT `datetime('now')`                 |
+
+One webhook per agent. Upsert on re-register (ON CONFLICT DO UPDATE). Secret is shown once on registration — store it securely.
 
 ---
 
@@ -483,6 +495,14 @@ Note: `agents`, `discover` etc. don't need COMM_USER but trigger auto-heartbeat 
 | `stuck`    | —                                 | `GET /api/stuck`    | Show stuck agents (no COMM_USER needed)   |
 | `overview` | —                                 | `GET /api/overview` | System overview (no COMM_USER needed)     |
 
+### Webhook Commands
+
+| Command                | Args/Flags     | Endpoint                   | Behavior                                                              |
+| ---------------------- | -------------- | -------------------------- | --------------------------------------------------------------------- |
+| `webhook register URL` | `--secret STR` | `POST /api/webhooks`       | Register webhook (auto-generates secret if omitted, prints to stderr) |
+| `webhook list`         | —              | `GET /api/webhooks`        | List all webhooks (no COMM_USER needed)                               |
+| `webhook delete`       | —              | `DELETE /api/webhooks/:id` | Delete your webhook                                                   |
+
 ### Output Format
 
 - All commands: `json.dumps(data, indent=2, ensure_ascii=False)` to stdout
@@ -744,6 +764,19 @@ forever:
 | POST   | `/api/cleanup/feed`   | `{feed_events}` (body: `{max_age_days?}`) |
 | DELETE | `/api/agents/offline` | `{purged}`                                |
 
+### Webhooks
+
+| Method | Path                     | Body                               | Response                | Errors   |
+| ------ | ------------------------ | ---------------------------------- | ----------------------- | -------- |
+| POST   | `/api/webhooks`          | `{agent_id, url, secret, events?}` | `WebhookSubscription`   | 400, 404 |
+| GET    | `/api/webhooks`          | —                                  | `WebhookSubscription[]` | —        |
+| GET    | `/api/webhooks/:agentId` | —                                  | `WebhookSubscription`   | 404      |
+| DELETE | `/api/webhooks/:agentId` | —                                  | `{deleted: true}`       | 404      |
+
+**`POST /api/webhooks`** — register or update a webhook for an agent. Upsert: if agent already has a webhook, replaces URL, secret, and events. Rate-limited. `agent_id` accepts name or UUID.
+
+**`DELETE /api/webhooks/:agentId`** — remove webhook. `agentId` accepts name or UUID.
+
 ### Error Format
 
 All errors: `{ error: string, code?: string }` with HTTP status. Codes: `NOT_FOUND` (404), `CONFLICT` (409), `VALIDATION_ERROR` (422), `RATE_LIMITED` (429).
@@ -877,7 +910,86 @@ Server periodically checks fingerprints → sends delta for changed categories o
 
 ---
 
-## 17. Known Issues & TODO
+## 17. Webhook Notifications
+
+Additive delivery mechanism alongside poll/watch/inbox. Agents register an HTTP endpoint and receive signed POST callbacks when messages arrive.
+
+### Architecture
+
+```
+agent-comm ──(message:sent event)──→ WebhookService
+                                         │
+                                         ├── Resolve recipients (to_agent + channel members)
+                                         ├── Filter: skip sender, check subscription events
+                                         └── HTTP POST (fire-and-forget, HMAC-signed)
+                                                    │
+                                                    ▼
+                                            External webhook receiver
+                                            (e.g. Hermes webhook platform)
+```
+
+### Delivery
+
+- **Trigger**: `message:sent` event fires after `sendMessage()` completes
+- **Recipients**: direct message → `to_agent`; channel message → all channel members with webhooks
+- **Fire-and-forget**: HTTP POST sent asynchronously, 5s timeout. Delivery failure does not block or retry.
+- **Self-exclusion**: sender's webhook is never triggered
+
+### Payload
+
+```json
+{
+  "event": "message:sent",
+  "timestamp": "2026-04-21T12:00:00.000Z",
+  "data": {
+    "id": 42,
+    "from_agent": "agent-uuid",
+    "to_agent": "recipient-uuid",
+    "channel_id": null,
+    "content": "message text",
+    "importance": "normal",
+    "created_at": "2026-04-21T12:00:00.000Z"
+  }
+}
+```
+
+### HMAC-SHA256 Signature
+
+Every webhook POST includes `X-Agent-Comm-Signature: sha256=<hex>` header. Receiver validates:
+
+```
+signature = HMAC-SHA256(secret, requestBody)
+```
+
+The `secret` is provided during registration and shown once. Store it securely — it is not returned by GET endpoints.
+
+### Hermes Integration
+
+Hermes agents should use the webhook platform's `deliver_only` mode:
+
+```bash
+# Register a webhook pointing to Hermes
+ac webhook register http://hermes-host:8080/api/webhooks/agent-name --secret YOUR_SECRET
+
+# In Hermes webhook config:
+# - URL: http://agent-comm-host:3420/api/webhooks
+# - Secret: same as registered above
+# - Mode: deliver_only (POST body IS the notification, no LLM processing)
+```
+
+This provides sub-second delivery with zero LLM cost — no background process needed (unlike `ac watch` which requires a running process with broken `_reader_loop` in hermes background mode; see `docs/HERMES.md`).
+
+### Constraints
+
+- One webhook URL per agent (MVP)
+- Events filter defaults to `["message:sent"]`
+- Webhook is **additive** — agents without webhooks use watch/poll/inbox as before
+- No retry on failure (fire-and-forget)
+- Rate-limited via existing token bucket
+
+---
+
+## 18. Known Issues & TODO
 
 ### Known Limitations
 
@@ -891,6 +1003,8 @@ Server periodically checks fingerprints → sends delta for changed categories o
 - [ ] WebUI: broadcast, forward, state editing, channel join/leave/archive
 - [ ] WebUI: per-message delete, agent unregister
 - [ ] WebUI: skill-based agent discovery
+- [ ] Webhook retry with exponential backoff (currently fire-and-forget)
+- [ ] Webhook delivery status tracking (last_success_at, failure_count)
 
 ### Future Phases (NOT for MVP)
 
