@@ -569,9 +569,10 @@ class Client:
     def ask(self, to, content, timeout=120):
         """Send a message and wait for a reply from the target agent.
 
+        Uses inbox-check loop (no flock) so it coexists with a running watch.
         1. Check if target is online — fail immediately if not
         2. Send message to target
-        3. Poll inbox in loops until a reply from target arrives or timeout
+        3. Loop: fetch unread inbox, match reply by UUID, mark ONLY match read
         4. Return the reply
         """
         import time
@@ -581,7 +582,6 @@ class Client:
         # Check if target is online
         target_id = self._resolve(to)
         if target_id == to:
-            # Not resolved — agent doesn't exist
             print(f"Error: agent \"{to}\" is not registered", file=sys.stderr)
             sys.exit(1)
         agents = self._req("GET", "/api/agents") or []
@@ -603,28 +603,36 @@ class Client:
             return None
 
         sent_id = sent.get("id")
+        aid = self._resolve(self.user)
         deadline = time.monotonic() + timeout
 
-        # Poll loop: wait for reply from target
-        aid = self._resolve(self.user)
-        while True:
+        # Inbox-check loop: no flock, coexists with watch
+        _timed_out = False
+        def _sigterm(*_a):
+            nonlocal _timed_out
+            _timed_out = True
+        signal.signal(signal.SIGTERM, _sigterm)
+
+        while not _timed_out:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                return None
+                print("No reply received (timeout)", file=sys.stderr)
+                sys.exit(1)
 
-            poll_sec = min(int(remaining), 55)  # server caps at 60
-            msgs = self.poll(timeout=poll_sec)
+            inbox = self._poll_req(
+                f"/api/agents/{aid}/inbox?unread=true&limit=50", timeout=10)
 
-            if msgs and isinstance(msgs, list):
-                for msg in msgs:
+            if inbox and isinstance(inbox, list):
+                for msg in inbox:
                     if (isinstance(msg, dict)
-                            and msg.get("from_agent") == to
+                            and msg.get("from_agent") == target_id
                             and msg.get("id") != sent_id):
-                        # Found a reply — mark read and return it
                         self.mark_read(msg["id"])
                         return msg
 
-        return None
+            time.sleep(5)
+
+        sys.exit(1)
 
     def mark_read(self, msg_id):
         self._need_user()
