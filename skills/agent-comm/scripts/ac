@@ -394,6 +394,8 @@ class Client:
         self._need_user()
         aid = self._resolve(self.user)
 
+        self._heartbeat()
+
         lock_fd = _lock_acquire(self.user, force=False)
         _dbg("lock acquired")
 
@@ -522,6 +524,8 @@ class Client:
             while True:
                 time.sleep(interval)
                 cycle_count += 1
+
+                self._heartbeat()
 
                 if cycle_count % 10 == 0:
                     _refresh_name_map()
