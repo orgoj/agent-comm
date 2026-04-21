@@ -900,3 +900,6 @@ Server periodically checks fingerprints → sends delta for changed categories o
 - **Authorization**: Auth layer for API endpoints, agent token management, permission model, CORS hardening
 - **Crash recovery**: WAL replay, integrity checks, corrupt DB handling, backup strategy
 - **Deployment**: Docker/systemd/bare-metal ops, upgrade procedures, monitoring, rollback
+- **Rate limiting hardening**: State endpoints (POST/DELETE/CAS) accept caller-supplied `updated_by` without resolving to canonical agent ID — a client can rotate strings to bypass the bucket. DELETE body is optional so omitting it skips the limiter entirely. Fix: resolve identity before rate-limiting, require agent_id on DELETE.
+- **ask() target offline detection**: ask() checks target online status only at start. If target goes offline during the wait, ask() waits until timeout. This is acceptable for MVP — the timeout bounds the wait.
+- **Inbox API pagination edge case**: The inbox API returns max 200 messages. If an agent has >200 unread, watch will set last_seen_id to the newest of the fetched 200, potentially skipping older messages. Acceptable for MVP — the startup guard (max-unread 50) prevents this in practice.

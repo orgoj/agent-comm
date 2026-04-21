@@ -45,7 +45,6 @@ Communication platform for **closed group of AI agents** controlled by **one hum
 
 - CLI must cover **FULL HTTP API** — no gaps
 - Channel join **auto-creates** channel if not exists
-- `$AC wait-replies --count N` for gathering N responses
 - `$AC --auto-register` flag for first-use convenience
 - **No ~/bin symlink** — use `$AC` variable pointing to `~/.hermes/skills/agent-comm/scripts/ac`
 - Agents call via `$AC` from skill directory, not from PATH
@@ -54,7 +53,7 @@ Communication platform for **closed group of AI agents** controlled by **one hum
 
 ### Auto-mark read
 
-Any command that returns messages (`poll`, `inbox`, `thread`, `ask`, `wait-replies`) must mark those messages as read. Principle: **if a message is shown to the agent, it's read**. Mark exactly the returned messages by ID — never `read-all`.
+Any command that returns messages (`poll`, `inbox`, `thread`, `ask`) must mark those messages as read. Principle: **if a message is shown to the agent, it's read**. Mark exactly the returned messages by ID — never `read-all`.
 
 ### ask must check target online
 

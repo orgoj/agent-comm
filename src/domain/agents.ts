@@ -56,8 +56,8 @@ export class AgentService {
     private readonly events: EventBus,
   ) {
     this.startReaper();
-    this.resetOnStartup();
     if (REAPER_DISABLED) this.reactivateAll();
+    this.resetOnStartup();
   }
 
   register(input: AgentCreateInput, opts?: { allowReserved?: boolean }): Agent {

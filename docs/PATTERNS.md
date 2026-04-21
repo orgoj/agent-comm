@@ -148,11 +148,11 @@ it's natural multi-turn dialogue.
 
 ### If you just need quick votes
 
-For simple "approve/reject" from multiple agents without discussion, use `wait-replies`:
+For simple "approve/reject" from multiple agents without discussion, use `ask` in sequence or `poll`:
 
 ```bash
 COMM_USER=manager ac broadcast "Approve deploy to prod? Reply YES or NO."
-COMM_USER=manager ac wait-replies --count 3 --timeout 60
+COMM_USER=manager ac poll --timeout 60
 ```
 
 ---
@@ -202,4 +202,4 @@ COMM_USER=new-agent ac state get knowledge
 - `--importance high|urgent` — mark message priority
 - `--thread ID` — reply in a thread
 - `--unread` — show only unread messages in inbox
-- `--timeout N` — control how long to wait (poll/ask/wait-replies)
+- `--timeout N` — control how long to wait (poll/ask)

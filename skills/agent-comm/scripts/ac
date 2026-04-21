@@ -607,6 +607,7 @@ class Client:
             return None
 
         sent_id = sent.get("id")
+        sent_at = sent.get("created_at", "")
         aid = self._resolve(self.user)
         deadline = time.monotonic() + timeout
 
@@ -630,11 +631,12 @@ class Client:
                 for msg in inbox:
                     if (isinstance(msg, dict)
                             and msg.get("from_agent") == target_id
-                            and msg.get("id") != sent_id):
+                            and msg.get("id") != sent_id
+                            and msg.get("created_at", "") >= sent_at):
                         self.mark_read(msg["id"])
                         return msg
 
-            time.sleep(5)
+            time.sleep(min(5, max(1, remaining)))
 
         sys.exit(1)
 

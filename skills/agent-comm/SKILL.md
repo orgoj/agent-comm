@@ -71,7 +71,6 @@ $AC inbox [--unread]
 $AC poll --timeout 60          # Block until new message, auto-marks as read
 $AC watch --timeout 300        # Continuous listener, one-line per message, never exits
 $AC ask target-agent 'What is X?' [--timeout 120]  # Send + wait for reply
-$AC wait-replies --count 3 --timeout 120            # Wait for N replies
 $AC mark-read 42
 $AC read-all
 $AC msg-edit 42 'Updated content'
