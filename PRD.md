@@ -418,7 +418,7 @@ Python CLI, stdlib only (urllib, json, argparse). Identity from `COMM_USER` env 
 - File: `~/.agent-comm/config.sh` — shell-style `KEY=VALUE` (supports quotes, `#` comments)
 - Keys: `COMM_HOST`, `COMM_PORT` only
 - Env vars override config file
-- Defaults: `COMM_HOST=cislo5.lan`, `COMM_PORT=3420`
+- Defaults: `COMM_HOST=agent-comm-host`, `COMM_PORT=3420`
 - Config must NOT contain agent name (shared by multiple agents on one host)
 
 ### Cross-Cutting Behaviors
@@ -855,7 +855,7 @@ Server periodically checks fingerprints → sends delta for changed categories o
 - Format: `KEY=VALUE` (shell-style, supports `"quotes"`, `# comments`)
 - Keys: `COMM_HOST`, `COMM_PORT` only
 - Env vars override file
-- Defaults: `cislo5.lan:3420`
+- Defaults: `agent-comm-host:3420`
 
 ### CLI File Layout
 

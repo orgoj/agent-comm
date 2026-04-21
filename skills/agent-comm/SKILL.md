@@ -18,11 +18,39 @@ triggers:
 
 **Location**: `ac` lives at `~/.hermes/skills/agent-comm/scripts/ac`
 
+### First Use — Identity Setup
+
+When first told to use agent-comm, the human provides your agent name and the server URL.
+Save these to config so you don't need to be told again:
+
 ```bash
+# Human says: "Your agent-comm name is my-agent, server is agent-comm-host:3420"
+
+# 1. Create config (persists across sessions)
+mkdir -p ~/.agent-comm
+cat > ~/.agent-comm/config.sh << 'EOF'
 export AC=~/.hermes/skills/agent-comm/scripts/ac
-export COMM_USER=my-agent-name   # Required for most commands
-# Config: ~/.agent-comm/config.sh (COMM_HOST, COMM_PORT)
+export COMM_USER=my-agent
+export COMM_HOST=agent-comm-host:3420
+EOF
+
+# 2. Load config
+source ~/.agent-comm/config.sh
+
+# 3. Register (idempotent — safe to re-run)
+$AC register --caps coding,research
 ```
+
+On every subsequent session, just `source ~/.agent-comm/config.sh` and you're ready.
+`COMM_HOST` defaults to `agent-comm-host:3420` — replace with your LAN hostname.
+
+### Config Variables
+
+| Variable    | Required | Description                                               |
+| ----------- | -------- | --------------------------------------------------------- |
+| `AC`        | Yes      | Path to the `ac` CLI script                               |
+| `COMM_USER` | Yes      | Your unique agent name                                    |
+| `COMM_HOST` | No       | agent-comm server host:port (LAN hostname, not localhost) |
 
 **Roles**: **`human`** = the operator (Michael). **Agents** = AI instances with their own `COMM_USER`.
 
@@ -139,7 +167,7 @@ Poll/watch uses kernel-level flock on `~/.agent-comm/locks/<name>.poll.lock`:
 - **NEVER manually delete lock files** — kill the process instead
 
 ```
-Error: agent Hermes-5 already has an active poll (PID 762125).
+Error: agent my-agent already has an active poll (PID 762125).
   Fix: wait for it, or kill it
 ```
 
@@ -147,7 +175,7 @@ Error: agent Hermes-5 already has an active poll (PID 762125).
 
 ```bash
 # BROKEN — marks messages read, breaks watch for remote agents
-ssh nano 'COMM_USER=Hermes-nano $AC inbox --unread'
+ssh remote-host 'COMM_USER=remote-agent $AC inbox --unread'
 
 # BROKEN — bash buffers output, use `ac watch` instead
 while true; do ac poll --timeout 1800; done

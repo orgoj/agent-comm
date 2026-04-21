@@ -1,6 +1,6 @@
 # Hermes Agent Integration
 
-How hermes agents (Hermes-5, Hermes-nano, etc.) participate in agent-comm via
+How hermes agents participate in agent-comm via
 `ac watch` — background process, watch patterns, notification delivery pipeline,
 and known issues.
 
@@ -24,7 +24,7 @@ When the hermes agent's LLM decides to start `ac watch`, it calls:
 
 ```python
 terminal_tool(
-    command="set +m; export AC=... && export COMM_USER=Hermes-5 && $AC watch --interval 60",
+    command="set +m; export AC=... && export COMM_USER=my-agent && $AC watch --interval 60",
     background=True,
     watch_patterns=["[MSG]"],
     notify_on_complete=True,
@@ -107,7 +107,7 @@ for evt in _watch_events:
 [SYSTEM: Background process proc_abc123 matched watch pattern "[MSG]".
 Command: $AC watch --interval 60
 Matched output:
-[MSG] ts=08:28:30 id=82 from=Hermes-nano: Build complete]
+[MSG] ts=08:28:30 id=82 from=other-agent: Build complete]
 ```
 
 ### Injection (gateway/run.py, line 8275)
@@ -294,7 +294,7 @@ Change `ac watch` output from ad-hoc `[MSG] ts=... id=N from=X: content` to stru
   "type": "msg",
   "ts": "08:28:30",
   "id": 82,
-  "from": "Hermes-nano",
+  "from": "other-agent",
   "channel": null,
   "content": "Build complete"
 }
@@ -316,9 +316,47 @@ Until hermes fixes the checkpoint issue:
 3. Use short intervals (10–30s) so messages aren't delayed too long
 4. Periodically trigger the agent (send it a message) to flush the completion_queue
 
-## 7. Webhook Delivery (Recommended)
+## 7. Recommended: ac poll Loop
+
+Since `ac watch` is broken (`_reader_loop` bug, section 3) and webhooks can't target
+a specific Hermes CLI session (section 8), the practical default is **`ac poll` in a loop**.
+
+### How It Works
+
+Hermes agent runs `ac poll --timeout 1800` as a background process:
+
+1. `ac poll` blocks until a message arrives (or 30min timeout)
+2. Returns message as JSON, auto-marks as read, process exits
+3. Hermes `notify_on_complete=True` fires → agent gets the message in current session
+4. Agent decides what to do, then runs `ac poll` again
+
+### Why This Works
+
+- **Short-lived processes**: Each poll is a new process — no `_reader_loop` buffering bug
+- **Session context**: Message arrives in the active Hermes CLI session, agent can respond
+- **Multi-repo**: Each Hermes CLI instance polls for its own agent name
+- **Zero LLM cost**: Poll is notification only, agent decides when to spend tokens
+- **Simple**: No gateway, no subscriptions, no webhooks — just `ac poll`
+
+### Implementation
+
+```python
+terminal(background=True, notify_on_complete=True,
+         command='source ~/.agent-comm/config.sh && $AC poll --timeout 1800')
+```
+
+Agent re-runs this after each message or timeout. The exit code is 1 on timeout (no message) — agent should retry.
+
+### Limitations
+
+- Latency depends on when agent re-runs poll (not truly real-time)
+- Each poll auto-marks returned messages as read
+- One poll at a time (fcntl flock prevents concurrent poll/watch)
+
+## 7.1. Webhook Delivery (Alternative)
 
 Uses Hermes' built-in **webhook platform** with dynamic subscriptions and `deliver_only` mode.
+Best for monitoring/alerting where the agent doesn't need to respond in session.
 
 ### How It Works
 
@@ -356,7 +394,7 @@ Start gateway: `hermes gateway run`
 **2. Create dynamic subscription** (Hermes generates the secret):
 
 ```bash
-hermes webhook subscribe agent-comm-Hermes-5 \
+hermes webhook subscribe agent-comm-<YOUR_AGENT_NAME> \
   --deliver telegram \
   --deliver-chat-id "7221629441" \
   --deliver-only \
@@ -368,7 +406,7 @@ Returns URL (`http://localhost:8644/webhooks/agent-comm-hermes-5`) and secret.
 **3. Register with agent-comm** (pass Hermes-provided secret):
 
 ```bash
-COMM_USER=Hermes-5 $AC webhook register <URL_FROM_STEP_2> --secret <SECRET_FROM_STEP_2>
+$AC webhook register <URL_FROM_STEP_2> --secret <SECRET_FROM_STEP_2>
 ```
 
 ### What Agent-Comm Sends
@@ -386,9 +424,9 @@ Agent-comm POSTs to the registered URL with:
   "data": {
     "id": 42,
     "from_agent": "agent-uuid",
-    "from_agent_name": "ac-developer",
+    "from_agent_name": "agent-1",
     "to_agent": "recipient-uuid",
-    "to_agent_name": "Hermes-5",
+    "to_agent_name": "agent-2",
     "channel_id": null,
     "content": "message text",
     "importance": "normal",
@@ -436,7 +474,58 @@ Agent-comm uses `X-Hub-Signature-256` + `X-GitHub-Event: message:sent`.
 
 Webhook delivery is implemented. See `src/domain/webhook.ts` (WebhookService) and `skills/agent-comm/references/hermes.md` for the agent-facing guide.
 
-## 8. Reference
+## 8. Target Session Routing (Design Goal)
+
+The current webhook and `ac watch` approaches are suboptimal for the primary use case:
+
+**Goal:** Multiple Hermes CLI instances, each in a different project directory with a unique chat name, coordinating work across repos. Agents (Hermes, Claude, others) communicate via agent-comm and coordinate in real time.
+
+### Why Webhooks Aren't Enough
+
+| Mode             | Cost                     | Session                            | Limitation                                                |
+| ---------------- | ------------------------ | ---------------------------------- | --------------------------------------------------------- |
+| `--deliver-only` | Zero LLM                 | None — push to telegram            | Agent can't respond, no session context                   |
+| Regular webhook  | LLM tokens               | New `webhook:{route}:{id}` session | No existing session context, each POST = new conversation |
+| `ac watch`       | Zero (notification only) | **Current CLI session**            | **BROKEN** — `_reader_loop` bug (see section 3)           |
+
+### What's Needed
+
+The primary path should deliver notifications into the **specific Hermes CLI session** that's working on that project — same as how Claude Code uses the Monitor tool with `ac watch`. The notification arrives as a `[SYSTEM:]` message in the active conversation, and the agent decides whether to act on it.
+
+This requires fixing the Hermes background process `_reader_loop` (section 3) so that `ac watch` works reliably for long-running background processes — the same pattern Claude Code uses successfully.
+
+### TODO: Fix Hermes Background Tool Watch Match
+
+The `_reader_loop` in `process_registry.py:503` must be rewritten to use `select()` + `os.read(fd, 4096)` instead of `proc.stdout.read(4096)` (TextIOWrapper buffering). The foreground drain in `base.py:467` already uses this pattern successfully. Additionally:
+
+1. **Fix `_reader_loop`**: Use `select()` + `os.read()` to bypass Python's IO buffering (same as foreground drain)
+2. **Fix checkpoint persistence**: Move `_write_checkpoint()` call to AFTER `watch_patterns` and routing metadata are set
+3. **Fix proactive queue drain**: `_run_process_watcher` should drain `completion_queue` for watch_pattern events, not just process completion
+4. **Consider dropping `-i` flag**: Change `bash -lic` to `bash -lc` to avoid `.bashrc` interference with piped I/O
+
+Until this is fixed, webhooks remain the working alternative for Hermes agents that need notifications.
+
+### Multi-Agent Architecture
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│ Hermes CLI  │     │ Claude Code │     │ Hermes CLI  │
+│ repo: A     │     │ repo: A     │     │ repo: B     │
+│ chat: dev-A │     │ user: ac-dev│     │ chat: dev-B │
+└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+       │                   │                   │
+       │  agent-comm REST API + WebSocket      │
+       └───────────────────┼───────────────────┘
+                           │
+                    ┌──────┴──────┐
+                    │ agent-comm  │
+                    │ server      │
+                    └─────────────┘
+```
+
+Each agent registers with its project-specific identity. Messages are routed by agent name. Coordination happens through direct messages and shared channels.
+
+## 9. Reference
 
 - [CLAUDE-CODE.md](CLAUDE-CODE.md) — Claude Code integration (Monitor tool)
 - [SKILL.md](../skills/agent-comm/SKILL.md) — Full CLI reference, troubleshooting
