@@ -369,25 +369,26 @@ class Client:
         finally:
             _lock_release(lock_fd)
 
-    def watch(self, interval=60):
+    def watch(self, interval=60, max_unread=50):
         """Background notification listener. Periodically checks for unread messages,
         prints one line per new message. Never marks anything as read.
         Never exits (until killed). Zero CPU when sleeping.
-        
+
         Agent runs EITHER watch OR poll — never both. Watch is for live notification,
         poll is for actually reading messages. They share a lock to enforce this.
-        
+
         How it works:
         - Fetches unread inbox periodically (every N seconds)
         - Filters out self-messages and already-emitted (id <= last_seen_id)
         - Prints one-line notification per new message
         - Saves last_seen_id to state file (survives restarts)
         - Sleeps until next cycle
-        
+
         Startup behavior:
-        - If <=10 unread messages → show all, proceed normally
-        - If >10 unread → show up to 20, print warning with total count,
-          tell agent to read/process messages before relying on watch
+        - If > max_unread → refuse to start, exit 1
+        - If 11-max_unread → show all with header
+        - If 1-10 → show all silently
+        - If 0 → silent
         """
 
         self._need_user()
@@ -486,27 +487,25 @@ class Client:
 
                 _dbg(f"startup: {len(unread)} inbox, {len(foreign)} foreign, {len(new_msgs)} new")
 
-                if len(new_msgs) > 20:
-                    # Too many unread — agent must process first
-                    sys.stdout.write(
-                        f"[WATCH] WARNING: {len(new_msgs)} unread messages! "
-                        f"Showing first 20. Read and process your messages "
-                        f"before relying on watch.\n")
-                    sys.stdout.flush()
-                    for m in new_msgs[:20]:
-                        _print_msg(m)
-                    last_seen_id = new_msgs[-1].get("id", last_seen_id)
+                if len(new_msgs) > max_unread:
+                    sys.stderr.write(
+                        f"Error: too many unread messages ({len(new_msgs)}). "
+                        f"Clear your inbox first: ac read-all or ac inbox\n")
+                    sys.stderr.flush()
+                    os._exit(1)
                 elif len(new_msgs) > 10:
                     sys.stdout.write(
                         f"[WATCH] {len(new_msgs)} unread messages (showing all)\n")
                     sys.stdout.flush()
-                    for m in new_msgs:
+                    displayed = new_msgs
+                    for m in displayed:
                         _print_msg(m)
-                    last_seen_id = new_msgs[-1].get("id", last_seen_id)
+                    last_seen_id = max(m.get("id", 0) for m in displayed)
                 elif len(new_msgs) > 0:
-                    for m in new_msgs:
+                    displayed = new_msgs
+                    for m in displayed:
                         _print_msg(m)
-                    last_seen_id = new_msgs[-1].get("id", last_seen_id)
+                    last_seen_id = max(m.get("id", 0) for m in displayed)
                 else:
                     _dbg("startup: no new unread messages")
 
@@ -819,6 +818,8 @@ def main():
     wa = sub.add_parser("watch", help="Background notification listener (one-line per msg, never exits)")
     wa.add_argument("--interval", type=int, default=60,
                     help="Polling interval in seconds (default 60)")
+    wa.add_argument("--max-unread", type=int, default=50,
+                    help="Max unread before refusing start (default 50)")
     wa.add_argument("--debug", action="store_true",
                     help="Print detailed cycle info to stderr")
 
@@ -930,7 +931,7 @@ def main():
     elif cmd == "watch":
         global DEBUG
         DEBUG = args.debug
-        c.watch(args.interval)
+        c.watch(args.interval, args.max_unread)
     elif cmd == "ask":
         result = c.ask(args.to, args.content, args.timeout)
         if result:
