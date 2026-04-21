@@ -419,6 +419,8 @@ Python CLI, stdlib only (urllib, json, argparse). Identity from `COMM_USER` env 
 **Auto-mark-read**: These commands mark returned messages as read:
 `inbox`, `poll`, `thread`
 
+**Read-marking principle (inviolable)**: A message is marked as read **only when it has been fully displayed to the agent**. No command may mark messages as read that the agent has not seen. `inbox`, `poll`, and `thread` display all fetched messages, so marking them read is correct. `ask` displays only the matched reply, so it must mark only that message — not the entire inbox batch. `watch` never marks read because it only prints one-line notifications (not full content).
+
 **Auto-register**: Global `--auto-register` flag — registers before first command that needs COMM_USER. Idempotent (returns existing if already registered). Guard prevents recursion.
 
 **Commands requiring COMM_USER** (call `_need_user()`): `register`, `unregister`, `heartbeat`, `send`, `broadcast`, `inbox`, `poll`, `watch`, `ask`, `mark-read`, `read-all`, `join`, `leave`, `create-channel`, `msg-edit`, `msg-delete`, `state set`, `state delete`
@@ -548,9 +550,9 @@ forever:
 1. Resolve target agent → verify registered and status is online/idle. If offline → error.
 2. Send message via `POST /api/messages`
 3. Enter inbox-check loop:
-   - Periodically fetch `GET /api/agents/:id/inbox?unread=true&limit=50` (does NOT use flock)
-   - Check for reply: any direct message where `from_agent` equals target agent's UUID AND `message.id != sent_message_id`
-   - If found: print it, mark as read, exit 0
+   - Periodically fetch `GET /api/agents/:id/inbox?unread=true&limit=50` (does NOT use flock, does NOT mark read)
+   - Scan fetched messages for reply: any direct message where `from_agent` equals target agent's UUID AND `message.id != sent_message_id`
+   - If found: display the reply, then mark **only this message** as read via `POST /api/messages/:id/read`. All other fetched messages remain unread — watch or a subsequent `inbox` will handle them.
    - If timeout reached: print `No reply received (timeout)`, exit 1
    - Sleep between checks (5s default, configurable)
 4. SIGTERM handler: clean exit with exit code 1
@@ -880,7 +882,6 @@ Server periodically checks fingerprints → sends delta for changed categories o
 ### Known Limitations
 
 - **Poll timeout double-cap**: REST + domain both cap at 60s. To extend beyond, both must be changed.
-- **`ask` inbox-check marks all fetched messages as read**: `ask` fetches unread inbox to find the reply. If other unread messages exist, they get marked read too. This is acceptable — the agent is actively processing and can handle them.
 - **Watch is at-least-once delivery under crash**: If watch emits a notification but crashes before saving `last_seen_id`, the message may be re-reported on restart. This is acceptable — agents should handle duplicate notifications idempotently.
 - **WebUI missing features**: No broadcast, forward, state editing, channel management, per-message delete, agent unregister, skill discovery.
 
