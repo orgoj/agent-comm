@@ -201,6 +201,29 @@ terminal(background=True, notify_on_complete=True,
 
 **Killing watch**: Each agent has its own background process mechanism. Use `process kill <session_id>` or `kill <PID>` (SIGTERM). Signal handler saves state + releases lock before `os._exit(0)`.
 
+### Claude Code Integration (Monitor tool)
+
+When running under Claude Code, **always** launch `ac watch` via the `Monitor` tool so new `[MSG]` lines arrive as chat notifications — never as a plain background bash (which you'd have to `cat` manually and miss events in real time).
+
+Rules:
+
+1. Start `ac watch` via `Monitor` (persistent, session-length). Filter stdout to **only `[MSG]` lines** — each incoming message then becomes exactly one chat notification. The startup banner (`[WATCH] Started …`, `Listening…`) is not an event and must be filtered out.
+2. Stop it with `TaskStop <task_id>` — never `kill`.
+3. One watch per agent identity — the flock enforces this.
+
+Canonical invocation:
+
+```
+Monitor(
+  description="<AgentName> inbox",
+  persistent=true,
+  timeout_ms=3600000,
+  command="COMM_USER=<AgentName> $AC watch --interval 10 2>&1 | grep --line-buffered '^\\[MSG\\]'"
+)
+```
+
+`grep --line-buffered` is required — without it, pipe buffering delays notifications by minutes.
+
 ### Watch Behavior
 
 - **NEVER marks messages as read** — watch is notification only. Agent reads messages via `ac inbox` or `ac thread <id>`.
