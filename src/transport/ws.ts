@@ -17,7 +17,7 @@ const packageMeta = readPackageMeta();
 export type WebSocketHandle = WsHandle;
 
 export function setupWebSocket(httpServer: Server, ctx: AppContext): WebSocketHandle {
-  return setupKitWebSocket({
+  const handle = setupKitWebSocket({
     httpServer,
     getFingerprints: () => getCategoryFingerprints(ctx),
     getCategoryData: (category) => {
@@ -53,6 +53,16 @@ export function setupWebSocket(httpServer: Server, ctx: AppContext): WebSocketHa
         '[agent-comm] WS error: ' + (err instanceof Error ? err.message : String(err)) + '\n',
       ),
   });
+
+  // Forward channel member events to WS clients
+  ctx.events.on('channel:member_joined', (data) => {
+    handle.broadcast(JSON.stringify({ type: 'channel:member_joined', data }));
+  });
+  ctx.events.on('channel:member_left', (data) => {
+    handle.broadcast(JSON.stringify({ type: 'channel:member_left', data }));
+  });
+
+  return handle;
 }
 
 // ---------------------------------------------------------------------------
