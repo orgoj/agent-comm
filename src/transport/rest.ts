@@ -209,6 +209,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     if (!name || typeof name !== 'string') return json(res, { error: '"name" is required' }, 400);
     if (!createdBy || typeof createdBy !== 'string')
       return json(res, { error: '"created_by" is required' }, 400);
+    ctx.rateLimiter.check(createdBy);
     try {
       const channel = ctx.channels.create(name, createdBy, description || undefined);
       json(res, channel, 201);
@@ -242,6 +243,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
       return json(res, { error: '"agent_id" is required' }, 400);
     const agent = ctx.agents.resolveByNameOrId(agentId);
     if (!agent) return json(res, { error: `Agent not found: ${agentId}` }, 404);
+    ctx.rateLimiter.check(agent.id);
 
     // Auto-create channel if it doesn't exist
     let channel = ctx.channels.getByName(params.name);
@@ -607,6 +609,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
 
     const sender = ctx.agents.resolveByNameOrId(from);
     if (!sender) return json(res, { error: `Agent not found: ${from}` }, 404);
+    ctx.rateLimiter.check(sender.id);
 
     processSendMessage(res, body, sender);
   });
@@ -619,6 +622,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
       return json(res, { error: '"from" (agent name or ID) is required' }, 400);
     const sender = ctx.agents.resolveByNameOrId(from);
     if (!sender) return json(res, { error: `Agent not found: ${from}` }, 404);
+    ctx.rateLimiter.check(sender.id);
     if (sender.status === 'offline')
       return json(res, { error: `Agent "${sender.name}" is offline` }, 403);
     const content = body.content as string | undefined;
@@ -647,12 +651,21 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     if (typeof value !== 'string') return json(res, { error: '"value" is required' }, 400);
     if (!updatedBy || typeof updatedBy !== 'string')
       return json(res, { error: '"updated_by" (agent ID) is required' }, 400);
+    ctx.rateLimiter.check(updatedBy);
 
     const entry = ctx.state.set(params.namespace, params.key, value, updatedBy, ttl);
     json(res, entry);
   });
 
-  route('DELETE', '/api/state/:namespace/:key', (_req, res, params) => {
+  route('DELETE', '/api/state/:namespace/:key', async (req, res, params) => {
+    let agentId: string | undefined;
+    try {
+      const body = await readBody(req);
+      agentId = body.agent_id as string | undefined;
+    } catch {
+      /* no body is fine for DELETE */
+    }
+    if (agentId) ctx.rateLimiter.check(agentId);
     const deleted = ctx.state.delete(params.namespace, params.key);
     if (!deleted) return json(res, { error: 'Not found' }, 404);
     json(res, { deleted: true });
@@ -674,6 +687,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     if (typeof newValue !== 'string') return json(res, { error: '"new_value" is required' }, 400);
     if (!updatedBy || typeof updatedBy !== 'string')
       return json(res, { error: '"updated_by" (agent ID or name) is required' }, 400);
+    ctx.rateLimiter.check(updatedBy);
     if (expected !== null && typeof expected !== 'string')
       return json(res, { error: '"expected" must be a string or null' }, 400);
 
