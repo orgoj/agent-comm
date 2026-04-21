@@ -24,3 +24,6 @@ playwright-report/
 # --- OS / editor cruft -------------------------------------------------------
 .DS_Store
 Thumbs.db
+
+# bv (beads viewer) local config and caches
+.bv/
