@@ -70,3 +70,12 @@ The hook is host-agnostic — the same `file-coord.mjs` script works for any cli
 ## Bench
 
 `bench/` contains a real measurement harness (not synthetic) that validates shared-file coordination via the file-coord hook and the `bash-guard` block on cross-session `git commit -am`. See `bench/README.md` for tiers, scenarios, and methodology.
+
+## CLI Messaging Principles (PRD.md is source of truth)
+
+- **Read-marking principle (inviolable)**: A message is marked read **only when fully displayed** to the agent. No command may mark messages read that the agent hasn't seen. `watch` never marks read (one-line notifications). `ask` marks only the matched reply, not the entire inbox batch.
+- **Watch/Ask/Poll coexistence**: Watch holds flock. Poll shares the same flock (mutually exclusive with watch). Ask uses NO flock — inbox-check loop — so it works alongside a running watch.
+- **Watch uses `?unread=true`** intentionally. If agent already read a message, watch won't report it — correct, agent already knows. No `since_id` needed.
+- **Watch startup guard**: refuses start if unread > threshold (default 50). Agent must clear inbox first.
+- **Watch heartbeats** every cycle to stay online.
+- **`ask` reply matching uses UUID** (not agent name).
