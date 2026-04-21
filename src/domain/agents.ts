@@ -56,6 +56,7 @@ export class AgentService {
     private readonly events: EventBus,
   ) {
     this.startReaper();
+    this.resetOnStartup();
     if (REAPER_DISABLED) this.reactivateAll();
   }
 
@@ -311,6 +312,16 @@ export class AgentService {
     );
     const agent = this.getById(agentId);
     if (agent) this.events.emit('agent:registered', { agent });
+  }
+
+  /** Mark agents with heartbeat > 2min old as offline on startup. */
+  resetOnStartup(): void {
+    this.db.run(
+      `UPDATE agents SET status = 'offline'
+       WHERE status IN ('online', 'idle')
+         AND last_heartbeat < datetime('now', '-120 seconds')
+         AND name != 'human'`,
+    );
   }
 
   /** Re-activate all offline agents on startup when reaper is disabled. */
