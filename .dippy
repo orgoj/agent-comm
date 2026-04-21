@@ -1,6 +1,11 @@
 allow git add *
 allow git commit *
+allow git -C * add *
+allow git -C * commit *
 allow npm run build
+allow npm run lint
 allow npm test
 
 allow skills/agent-comm/scripts/ac *
+
+allow-read ~/projects/hermes-agent/**
