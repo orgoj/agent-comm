@@ -412,14 +412,16 @@ Python CLI, stdlib only (urllib, json, argparse). Identity from `COMM_USER` env 
 ### Cross-Cutting Behaviors
 
 **Auto-heartbeat**: These commands send heartbeat before executing:
-`agents`, `discover`, `send`, `broadcast`, `channels`, `channel`, `create-channel`, `read-status`, `thread`, `state set`, `state get`
+`agents`, `discover`, `send`, `broadcast`, `channels`, `channel`, `create-channel`, `read-status`, `thread`, `state set`, `state get`, `watch`
+
+**Watch heartbeat**: The `watch` command heartbeats automatically on every inbox fetch cycle (every `--interval` seconds). This keeps the agent online while listening.
 
 **Auto-mark-read**: These commands mark returned messages as read:
 `inbox`, `poll`, `thread`
 
 **Auto-register**: Global `--auto-register` flag — registers before first command that needs COMM_USER. Idempotent (returns existing if already registered). Guard prevents recursion.
 
-**Commands requiring COMM_USER** (call `_need_user()`): `register`, `unregister`, `heartbeat`, `send`, `broadcast`, `inbox`, `poll`, `watch`, `ask`, `mark-read`, `read-all`, `join`, `leave`, `create-channel`, `msg-edit`, `msg-delete`, `state set`, `state delete`, `wait-replies`
+**Commands requiring COMM_USER** (call `_need_user()`): `register`, `unregister`, `heartbeat`, `send`, `broadcast`, `inbox`, `poll`, `watch`, `ask`, `mark-read`, `read-all`, `join`, `leave`, `create-channel`, `msg-edit`, `msg-delete`, `state set`, `state delete`
 
 **Commands NOT requiring COMM_USER**: `health`, `agents`, `discover`, `channels`, `channel`, `read-status`, `thread`, `state get`, `feed`, `stuck`, `overview`
 
@@ -437,21 +439,20 @@ Note: `agents`, `discover` etc. don't need COMM_USER but trigger auto-heartbeat 
 
 ### Messaging Commands
 
-| Command               | Args/Flags                              | Endpoint                            | Behavior                                                                                                                                                                                                                            |
-| --------------------- | --------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `send TO CONTENT`     | `--importance`, `--thread ID`           | `POST /api/messages`                | Send DM or channel msg. `TO` prefix `channel:` → channel msg                                                                                                                                                                        |
-| `broadcast CONTENT`   | `--importance`                          | `POST /api/messages/broadcast`      | Send to all online agents                                                                                                                                                                                                           |
-| `inbox`               | `--unread`                              | `GET /api/agents/:id/inbox`         | Check inbox (auto-mark-read)                                                                                                                                                                                                        |
-| `poll`                | `--timeout 60`, `--all`, `--force`      | `GET /api/agents/:id/poll`          | Block until message (auto-mark-read, flock)                                                                                                                                                                                         |
-| `watch`               | `--interval 60`, `--debug`              | `GET inbox` (periodic)              | Background listener (never marks read, flock)                                                                                                                                                                                       |
-| `ask TO CONTENT`      | `--timeout 120`                         | send + poll loop                    | Send + wait for reply. **Reply matching**: any direct message where `from_agent` equals the target agent's resolved name AND `message.id != sent_message_id`. Checks target is registered and status is online/idle before sending. |
-| `wait-replies`        | `--count N` (required), `--timeout 120` | poll loop                           | Collect N distinct sender replies. Tracks unique `from_agent` names in `seen_senders` set. No flock — uses `_poll_req()` directly.                                                                                                  |
-| `mark-read ID`        | —                                       | `POST /api/messages/:id/read`       | Mark single message                                                                                                                                                                                                                 |
-| `read-all`            | —                                       | `POST /api/agents/:id/read-all`     | Mark all inbox as read                                                                                                                                                                                                              |
-| `msg-edit ID CONTENT` | —                                       | `PATCH /api/messages/:id`           | Edit own message                                                                                                                                                                                                                    |
-| `msg-delete ID`       | —                                       | `DELETE /api/messages/:id`          | Delete own message                                                                                                                                                                                                                  |
-| `read-status ID`      | —                                       | `GET /api/messages/:id/read-status` | Who read this message                                                                                                                                                                                                               |
-| `thread ID`           | —                                       | `GET /api/messages/:id/thread`      | Full thread (auto-mark-read)                                                                                                                                                                                                        |
+| Command               | Args/Flags                                    | Endpoint                            | Behavior                                                                                                                                                                                            |
+| --------------------- | --------------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send TO CONTENT`     | `--importance`, `--thread ID`                 | `POST /api/messages`                | Send DM or channel msg. `TO` prefix `channel:` → channel msg                                                                                                                                        |
+| `broadcast CONTENT`   | `--importance`                                | `POST /api/messages/broadcast`      | Send to all online agents                                                                                                                                                                           |
+| `inbox`               | `--unread`                                    | `GET /api/agents/:id/inbox`         | Check inbox (auto-mark-read)                                                                                                                                                                        |
+| `poll`                | `--timeout 60`, `--all`, `--force`            | `GET /api/agents/:id/poll`          | Block until message (auto-mark-read, flock). **Mutually exclusive with watch** — both use the same flock. Use `ask` instead if watch is running.                                                    |
+| `watch`               | `--interval 60`, `--max-unread 50`, `--debug` | `GET inbox` (periodic)              | Background listener (never marks read, flock). See Watch — Detailed Behavior below.                                                                                                                 |
+| `ask TO CONTENT`      | `--timeout 120`                               | send + inbox-check loop             | Send + wait for reply. **Does NOT use poll or flock** — works alongside a running `watch`. Checks target is registered and status is online/idle before sending. See Ask — Detailed Behavior below. |
+| `mark-read ID`        | —                                             | `POST /api/messages/:id/read`       | Mark single message                                                                                                                                                                                 |
+| `read-all`            | —                                             | `POST /api/agents/:id/read-all`     | Mark all inbox as read                                                                                                                                                                              |
+| `msg-edit ID CONTENT` | —                                             | `PATCH /api/messages/:id`           | Edit own message                                                                                                                                                                                    |
+| `msg-delete ID`       | —                                             | `DELETE /api/messages/:id`          | Delete own message                                                                                                                                                                                  |
+| `read-status ID`      | —                                             | `GET /api/messages/:id/read-status` | Who read this message                                                                                                                                                                               |
+| `thread ID`           | —                                             | `GET /api/messages/:id/thread`      | Full thread (auto-mark-read)                                                                                                                                                                        |
 
 ### Channel Commands
 
@@ -489,20 +490,23 @@ Note: `agents`, `discover` etc. don't need COMM_USER but trigger auto-heartbeat 
 
 ### Error Format (stderr)
 
-| Condition          | Message                                                                                               |
-| ------------------ | ----------------------------------------------------------------------------------------------------- |
-| HTTP error         | `Error {code}: {message}`                                                                             |
-| Connection failed  | `Connection failed: {reason}`                                                                         |
-| Timeout            | `Error: request timed out`                                                                            |
-| COMM_USER missing  | `Error: COMM_USER not set`                                                                            |
-| Poll lock conflict | `Error: agent X already has an active poll (PID N). Fix: wait for it, kill it, or use --force`        |
-| Poll timeout       | `Error: poll timed out after Ns with no messages. This is normal — start a new poll to keep waiting.` |
-| Ask timeout        | `No reply received (timeout)`                                                                         |
-| Ask target offline | `Error: agent "X" is offline (status: Y)`                                                             |
+| Condition             | Message                                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------- |
+| HTTP error            | `Error {code}: {message}`                                                                             |
+| Connection failed     | `Connection failed: {reason}`                                                                         |
+| Timeout               | `Error: request timed out`                                                                            |
+| COMM_USER missing     | `Error: COMM_USER not set`                                                                            |
+| Poll lock conflict    | `Error: agent X already has an active poll (PID N). Fix: wait for it, kill it, or use --force`        |
+| Poll timeout          | `Error: poll timed out after Ns with no messages. This is normal — start a new poll to keep waiting.` |
+| Ask timeout           | `No reply received (timeout)`                                                                         |
+| Ask target offline    | `Error: agent "X" is offline (status: Y)`                                                             |
+| Watch unread overflow | `Error: too many unread messages (N). Clear your inbox first: ac read-all or ac inbox`                |
 
 ### Watch — Detailed Behavior
 
 **Purpose**: Background notification listener. Never marks read. Never exits.
+
+**Design principle**: Watch reports only **unread** messages. If an agent already read a message (via `inbox`, `thread`, or `ask`), watch will not report it — the agent already knows about it. Watch uses `?unread=true` intentionally; no `since_id` watermark is needed.
 
 **Startup**:
 
@@ -511,16 +515,19 @@ Note: `agents`, `discover` etc. don't need COMM_USER but trigger auto-heartbeat 
 3. Fetch agent list → build name map
 4. Load `last_seen_id` from `~/.agent-comm/state/<name>.watch.state`
 5. Fetch unread inbox (`?unread=true&limit=200`)
-6. Filter: exclude self-messages, exclude `id <= last_seen_id`, sort ascending
-7. Display based on count: 0=silent, 1-10=all, 11-20=all with header, >20=first 20 + warning
-8. Print `[WATCH] Listening...`
+6. **Startup guard**: if unread count > 50, refuse to start. Print: `Error: too many unread messages (N). Clear your inbox first: ac read-all or ac inbox`. Exit 1. Threshold configurable via `--max-unread` (default 50).
+7. Filter: exclude self-messages, exclude `id <= last_seen_id`, sort ascending
+8. Display based on count: 0=silent, 1-10=all, 11-20=all with header, >20=first 20 + warning
+9. **Save `last_seen_id`** = max(displayed message IDs) — atomic write via tmp+rename. This prevents re-reporting on restart.
+10. Print `[WATCH] Listening...`
 
 **Main loop**:
 
 ```
 forever:
-  sleep(interval)  // default 60s, zero CPU
+  sleep(interval)  // default 60s, configurable via --interval
   every 10 cycles: refresh name map
+  heartbeat (best-effort, errors swallowed)
   fetch unread inbox (?unread=true&limit=200)
   on failure: increment counter, log every 10th, continue
   on success after failures: reset counter
@@ -528,11 +535,33 @@ forever:
   emit new messages, update last_seen_id, save state (atomic rename)
 ```
 
-**State file**: `~/.agent-comm/state/<name>.watch.state` — single integer, atomic write via tmp+rename
+**State file**: `~/.agent-comm/state/<name>.watch.state` — single integer (last_seen_id), atomic write via tmp+rename
+
+**Coexistence with `ask`**: `ask` does NOT use the flock — it uses an inbox-check loop. Watch and ask can run simultaneously. If watch also prints the reply that `ask` is waiting for, the agent simply ignores the duplicate notification since `ask` already returned it.
+
+### Ask — Detailed Behavior
+
+**Purpose**: Send a message to a specific agent and wait for their reply. Works regardless of whether `watch` or `poll` is running.
+
+**Flow**:
+
+1. Resolve target agent → verify registered and status is online/idle. If offline → error.
+2. Send message via `POST /api/messages`
+3. Enter inbox-check loop:
+   - Periodically fetch `GET /api/agents/:id/inbox?unread=true&limit=50` (does NOT use flock)
+   - Check for reply: any direct message where `from_agent` equals target agent's UUID AND `message.id != sent_message_id`
+   - If found: print it, mark as read, exit 0
+   - If timeout reached: print `No reply received (timeout)`, exit 1
+   - Sleep between checks (5s default, configurable)
+4. SIGTERM handler: clean exit with exit code 1
+
+**Reply matching uses agent UUID** (not name) for correctness — compares `from_agent` field against the resolved target agent's ID.
+
+**No flock**: ask intentionally does NOT acquire the poll/watch flock. This allows it to run alongside a background `watch` process. If `watch` also picks up the reply message and prints a notification, the agent can safely ignore it since `ask` already returned the same content.
 
 ### Poll — Detailed Behavior
 
-- Acquires same flock as watch (mutual exclusion)
+- Acquires same flock as watch (mutual exclusion). **Poll and watch cannot run simultaneously.** Use `ask` for send+reply when watch is running.
 - Supports `--force`: reads PID from lock, sends SIGTERM, polls up to 3s for death
 - Server-side long-poll in 55s chunks, client loops
 - Auto-marks returned messages as read
@@ -848,27 +877,23 @@ Server periodically checks fingerprints → sends delta for changed categories o
 
 ## 17. Known Issues & TODO
 
-### Critical
-
-- [ ] **Every agent API request must send heartbeat** — currently only specific commands auto-heartbeat. `watch` and other API-calling commands should heartbeat on every request.
-
 ### Known Limitations
 
 - **Poll timeout double-cap**: REST + domain both cap at 60s. To extend beyond, both must be changed.
-- **`wait-replies` has no lock protection**: Uses `_poll_req()` directly, not `self.poll()`, so concurrent poll is possible.
-- **`ask` reply matching uses names not IDs**: Compares `from_agent` to name string, not UUID.
+- **`ask` inbox-check marks all fetched messages as read**: `ask` fetches unread inbox to find the reply. If other unread messages exist, they get marked read too. This is acceptable — the agent is actively processing and can handle them.
+- **Watch is at-least-once delivery under crash**: If watch emits a notification but crashes before saving `last_seen_id`, the message may be re-reported on restart. This is acceptable — agents should handle duplicate notifications idempotently.
 - **WebUI missing features**: No broadcast, forward, state editing, channel management, per-message delete, agent unregister, skill discovery.
 
 ### Backlog
 
 - [ ] Extend poll timeout beyond 60s (requires REST + domain changes)
-- [ ] Add lock protection to `wait-replies`
 - [ ] WebUI: broadcast, forward, state editing, channel join/leave/archive
 - [ ] WebUI: per-message delete, agent unregister
 - [ ] WebUI: skill-based agent discovery
 
 ### Future Phases (NOT for MVP)
 
+- **CLI: CAS and Ack commands**: Backend supports compare-and-swap state operations and message acknowledgment, but CLI `ac` lacks dedicated commands. Currently REST-only. Add `ac state cas NS KEY EXPECTED VALUE` and `ac ack ID` in future phase.
 - **Database migrations**: Schema migration strategy, version tracking, backwards compatibility, rollback procedures
 - **Performance & scaling**: Tested limits (max agents, messages/sec, concurrent WS, DB size), memory profiling, bottleneck documentation
 - **Authorization**: Auth layer for API endpoints, agent token management, permission model, CORS hardening
