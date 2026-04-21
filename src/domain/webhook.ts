@@ -1,5 +1,6 @@
 import { createHmac } from 'crypto';
 import { request as httpReq } from 'http';
+import { request as httpsReq } from 'https';
 import type { Db } from '../storage/database.js';
 import type { EventBus } from './events.js';
 import type { Message, WebhookSubscription } from '../types.js';
@@ -20,6 +21,30 @@ function rowToSub(row: WebhookRow): WebhookSubscription {
     events: JSON.parse(row.events),
     created_at: row.created_at,
   };
+}
+
+function stripSecret(
+  sub: WebhookSubscription,
+): Omit<WebhookSubscription, 'secret'> & { secret?: never } {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { secret: _, ...rest } = sub;
+  return rest;
+}
+
+export { stripSecret };
+
+export function validateWebhookUrl(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+      return 'URL must use http:// or https://';
+    }
+    if (!u.hostname) return 'URL must have a hostname';
+    if (url.length > 2048) return 'URL too long (max 2048 chars)';
+    return null;
+  } catch {
+    return 'Invalid URL format';
+  }
 }
 
 export class WebhookService {
@@ -103,9 +128,10 @@ export class WebhookService {
 
     try {
       const u = new URL(sub.url);
+      const isHttps = u.protocol === 'https:';
       const opts = {
         hostname: u.hostname,
-        port: u.port || 80,
+        port: u.port || (isHttps ? 443 : 80),
         path: u.pathname + u.search,
         method: 'POST',
         headers: {
@@ -115,17 +141,26 @@ export class WebhookService {
         timeout: 5000,
       };
 
-      const req = httpReq(opts, (res) => {
+      const req = (isHttps ? httpsReq : httpReq)(opts, (res) => {
         res.resume();
       });
-      req.on('error', () => {});
+      req.on('error', (err) => {
+        process.stderr.write(
+          `[agent-comm] Webhook delivery failed for ${sub.agent_id}: ${err.message}\n`,
+        );
+      });
       req.on('timeout', () => {
+        process.stderr.write(
+          `[agent-comm] Webhook delivery timed out for ${sub.agent_id} → ${sub.url}\n`,
+        );
         req.destroy();
       });
       req.write(payload);
       req.end();
-    } catch {
-      // fire-and-forget
+    } catch (err) {
+      process.stderr.write(
+        `[agent-comm] Webhook delivery error for ${sub.agent_id}: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
     }
   }
 }

@@ -18,6 +18,7 @@ import {
 } from 'agent-common';
 import type { AppContext } from '../context.js';
 import { CommError, ValidationError } from '../types.js';
+import { stripSecret, validateWebhookUrl } from '../domain/webhook.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -456,6 +457,8 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     if (!agentId || typeof agentId !== 'string')
       return json(res, { error: '"agent_id" is required' }, 400);
     if (!url || typeof url !== 'string') return json(res, { error: '"url" is required' }, 400);
+    const urlErr = validateWebhookUrl(url);
+    if (urlErr) return json(res, { error: urlErr }, 400);
     if (!secret || typeof secret !== 'string')
       return json(res, { error: '"secret" is required' }, 400);
     const agent = ctx.agents.resolveByNameOrId(agentId);
@@ -467,7 +470,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
   });
 
   route('GET', '/api/webhooks', (_req, res) => {
-    json(res, ctx.webhooks.list());
+    json(res, ctx.webhooks.list().map(stripSecret));
   });
 
   route('GET', '/api/webhooks/:agentId', (_req, res, params) => {
@@ -475,7 +478,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     if (!agent) return json(res, { error: 'Not found' }, 404);
     const sub = ctx.webhooks.getForAgent(agent.id);
     if (!sub) return json(res, { error: 'No webhook registered' }, 404);
-    json(res, sub);
+    json(res, stripSecret(sub));
   });
 
   route('DELETE', '/api/webhooks/:agentId', async (_req, res, params) => {

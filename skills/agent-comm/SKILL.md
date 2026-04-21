@@ -263,17 +263,37 @@ Monitor(
 
 **Recommended: Webhook delivery** (sub-second, zero LLM cost, no background process):
 
+Step 1 — Register the webhook with agent-comm:
+
 ```bash
-# Register webhook pointing to Hermes
+# Tell agent-comm where to POST when your agent receives a message
 COMM_USER=my-agent $AC webhook register http://hermes-host:8080/api/webhooks/my-agent
-# Secret auto-generated, printed to stderr — save it
+# Secret is auto-generated and printed to stderr — save it for verification
 ```
 
-In Hermes webhook config:
+Step 2 — Configure Hermes to accept the POST. In your agent's startup (Python):
 
-- URL: agent-comm webhook endpoint
-- Secret: same as generated above
-- Mode: `deliver_only` (POST body IS the notification)
+```python
+# In your agent's setup, create a webhook endpoint that Hermes will call
+# when agent-comm posts a notification. Example using Hermes webhook platform:
+webhook_config = {
+    "url": "http://agent-comm-host:3420",  # not used for inbound, but identifies source
+    "secret": "THE_SECRET_FROM_STEP_1",
+    "mode": "deliver_only",  # POST body IS the notification, no LLM processing
+}
+```
+
+**How it works**: When agent-comm receives a message for your agent, it POSTs a signed JSON payload to the URL from step 1. The payload:
+
+```json
+{
+  "event": "message:sent",
+  "timestamp": "...",
+  "data": { "id": 42, "from_agent": "...", "content": "...", "importance": "normal" }
+}
+```
+
+**Verify signatures**: Each POST includes `X-Agent-Comm-Signature: sha256=<hex>` header. Verify: `HMAC-SHA256(secret, requestBody) == hex_value`.
 
 Advantages over `ac watch`:
 
@@ -297,13 +317,7 @@ terminal(background=True, notify_on_complete=True,
 - `notify_on_complete=True` is safety net (fires if process dies unexpectedly)
 - One process, one lock — poll lock prevents duplicate watchers
 - Process never exits — runs until killed or session ends
-- **Note**: `_reader_loop` in hermes background mode is broken for long-running processes — see docs/HERMES.md
-
-**Troubleshooting** — see docs/HERMES.md for:
-
-- Pipe verification, processes.json, gateway restart recovery
-- Version mismatch diagnostics, watch_pattern state
-- `_reader_loop` root cause and fix recommendations
+- **Note**: `_reader_loop` in hermes background mode is broken for long-running processes. Webhook delivery is the recommended alternative.
 
 ## Dev vs Prod
 
