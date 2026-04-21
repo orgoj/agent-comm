@@ -724,6 +724,18 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     json(res, stats);
   });
 
+  route('POST', '/api/cleanup/feed', async (req, res) => {
+    const body = await readBody(req);
+    const maxAgeDays =
+      typeof body.max_age_days === 'number' &&
+      Number.isFinite(body.max_age_days) &&
+      body.max_age_days > 0
+        ? body.max_age_days
+        : undefined;
+    const purged = ctx.cleanup.cleanupFeedEvents(maxAgeDays);
+    json(res, { feed_events: purged });
+  });
+
   route('POST', '/api/cleanup/full', (_req, res) => {
     const stats = ctx.cleanup.purgeEverything();
     json(res, stats);
