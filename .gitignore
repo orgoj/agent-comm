@@ -27,3 +27,4 @@ Thumbs.db
 
 # bv (beads viewer) local config and caches
 .bv/
+beads_report_*.md
