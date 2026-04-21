@@ -15,6 +15,7 @@ import { CleanupService } from './domain/cleanup.js';
 import { RateLimiter } from './domain/rate-limit.js';
 import { FeedService } from './domain/feed.js';
 import { BranchService } from './domain/branches.js';
+import { WebhookService } from './domain/webhook.js';
 
 export interface AppContext {
   readonly db: Db;
@@ -27,6 +28,7 @@ export interface AppContext {
   readonly rateLimiter: RateLimiter;
   readonly feed: FeedService;
   readonly branches: BranchService;
+  readonly webhooks: WebhookService;
   close(): void;
 }
 
@@ -52,6 +54,7 @@ export function createContext(dbOptions?: DbOptions): AppContext {
   const rateLimiter = new RateLimiter();
   const feed = new FeedService(db, events);
   const branches = new BranchService(db, events);
+  const webhooks = new WebhookService(db, events);
 
   // Wire cross-service dependencies (avoids circular imports)
   messages.setAgentLookup(agents);
@@ -68,6 +71,7 @@ export function createContext(dbOptions?: DbOptions): AppContext {
     rateLimiter,
     feed,
     branches,
+    webhooks,
     close() {
       if (closed) return;
       closed = true;

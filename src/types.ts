@@ -238,3 +238,15 @@ export interface Skill {
   readonly name: string;
   readonly tags: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Webhooks
+// ---------------------------------------------------------------------------
+
+export interface WebhookSubscription {
+  readonly agent_id: string;
+  readonly url: string;
+  readonly secret: string;
+  readonly events: readonly string[];
+  readonly created_at: string;
+}

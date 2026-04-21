@@ -740,6 +740,26 @@ class Client:
     def overview(self):
         return self._req("GET", "/api/overview")
 
+    def webhook_register(self, url, secret=None):
+        self._need_user()
+        aid = self._resolve(self.user)
+        import secrets as _secrets
+        if not secret:
+            secret = _secrets.token_hex(32)
+        body = {"agent_id": aid, "url": url, "secret": secret}
+        result = self._req("POST", "/api/webhooks", body)
+        if result:
+            print(f"Secret: {secret}", file=sys.stderr)
+        return result
+
+    def webhook_list(self):
+        return self._req("GET", "/api/webhooks")
+
+    def webhook_delete(self):
+        self._need_user()
+        aid = self._resolve(self.user)
+        return self._req("DELETE", f"/api/webhooks/{aid}")
+
 
 
 # ── Output ───────────────────────────────────────────────────────────────────
@@ -868,6 +888,14 @@ def main():
 
     sub.add_parser("overview", help="Full system overview")
 
+    wh = sub.add_parser("webhook", help="Webhook management")
+    wh_sub = wh.add_subparsers(dest="webhook_cmd")
+    wh_reg = wh_sub.add_parser("register", help="Register a webhook URL")
+    wh_reg.add_argument("url", help="Webhook endpoint URL")
+    wh_reg.add_argument("--secret", help="HMAC secret (auto-generated if omitted)")
+    wh_list = wh_sub.add_parser("list", help="List all webhooks")
+    wh_del = wh_sub.add_parser("delete", help="Delete your webhook")
+
     args = p.parse_args()
     if not args.cmd:
         p.print_help()
@@ -946,6 +974,16 @@ def main():
         output(c.stuck())
     elif cmd == "overview":
         output(c.overview())
+    elif cmd == "webhook":
+        if args.webhook_cmd == "register":
+            output(c.webhook_register(args.url, args.secret))
+        elif args.webhook_cmd == "list":
+            output(c.webhook_list())
+        elif args.webhook_cmd == "delete":
+            output(c.webhook_delete())
+        else:
+            wh.print_help()
+            sys.exit(1)
 
 
 if __name__ == "__main__":

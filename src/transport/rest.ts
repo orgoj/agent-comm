@@ -445,6 +445,48 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
   });
 
   // -----------------------------------------------------------------------
+  // Webhook management
+  // -----------------------------------------------------------------------
+
+  route('POST', '/api/webhooks', async (req, res) => {
+    const body = await readBody(req);
+    const agentId = body.agent_id as string | undefined;
+    const url = body.url as string | undefined;
+    const secret = body.secret as string | undefined;
+    if (!agentId || typeof agentId !== 'string')
+      return json(res, { error: '"agent_id" is required' }, 400);
+    if (!url || typeof url !== 'string') return json(res, { error: '"url" is required' }, 400);
+    if (!secret || typeof secret !== 'string')
+      return json(res, { error: '"secret" is required' }, 400);
+    const agent = ctx.agents.resolveByNameOrId(agentId);
+    if (!agent) return json(res, { error: `Agent not found: ${agentId}` }, 404);
+    ctx.rateLimiter.check(agent.id);
+    const events = Array.isArray(body.events) ? (body.events as string[]) : undefined;
+    const sub = ctx.webhooks.register(agent.id, url, secret, events);
+    json(res, sub, 201);
+  });
+
+  route('GET', '/api/webhooks', (_req, res) => {
+    json(res, ctx.webhooks.list());
+  });
+
+  route('GET', '/api/webhooks/:agentId', (_req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.agentId);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    const sub = ctx.webhooks.getForAgent(agent.id);
+    if (!sub) return json(res, { error: 'No webhook registered' }, 404);
+    json(res, sub);
+  });
+
+  route('DELETE', '/api/webhooks/:agentId', async (_req, res, params) => {
+    const agent = ctx.agents.resolveByNameOrId(params.agentId);
+    if (!agent) return json(res, { error: 'Not found' }, 404);
+    const deleted = ctx.webhooks.unregister(agent.id);
+    if (!deleted) return json(res, { error: 'No webhook registered' }, 404);
+    json(res, { deleted: true });
+  });
+
+  // -----------------------------------------------------------------------
   // Bench results — read-only view of bench/_results/latest.json. Returns
   // an empty object if the file doesn't exist (e.g. bench has never been run).
   // -----------------------------------------------------------------------

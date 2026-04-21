@@ -211,4 +211,19 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 7,
+    up: (db: Database.Database) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS webhooks (
+          agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+          url TEXT NOT NULL,
+          secret TEXT NOT NULL,
+          events TEXT NOT NULL DEFAULT '["message:sent"]',
+          created_at TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (agent_id)
+        );
+      `);
+    },
+  },
 ];
