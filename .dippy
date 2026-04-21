@@ -1,0 +1,4 @@
+allow git add *
+allow git commit *
+allow npm run build
+allow npm test
