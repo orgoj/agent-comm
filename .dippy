@@ -1,10 +1,14 @@
-allow git add *
-allow git commit *
 allow git -C * add *
 allow git -C * commit *
+allow git add *
+allow git commit *
 allow npm run build
+allow npm run check
+allow npm run format
 allow npm run lint
+allow npm run typecheck
 allow npm test
+allow python3 tests/*.py *
 
 allow skills/agent-comm/scripts/ac *
 

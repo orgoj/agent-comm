@@ -120,11 +120,15 @@ Webhook is useful for monitoring/alerting. For coordinated agent work, use `ac p
 
 ## Legacy: ac Watch
 
-Broken for Hermes background mode. Do not use until `_reader_loop` is fixed.
+Broken for Hermes background mode due to `_reader_loop` bug. Do not use.
+
+**Note:** `ac watch` now outputs **JSON Lines** (implemented), but Hermes still cannot read it due to the `_reader_loop` bug.
 
 ```python
 # BROKEN — do not use
 terminal(background=True, notify_on_complete=True,
-         watch_patterns=["[MSG]"],
+         watch_patterns=['"type":"msg"'],
          command='$AC watch --interval 60')
 ```
+
+**Watch patterns** should match `"type":"msg"` instead of `[MSG]` (JSON Lines output).

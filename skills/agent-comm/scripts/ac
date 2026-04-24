@@ -435,19 +435,21 @@ class Client:
 
             _refresh_name_map()
 
+            def _emit(obj, stream=sys.stdout):
+                stream.write(json.dumps(obj, ensure_ascii=False) + "\n")
+                stream.flush()
+
             def _print_msg(m):
                 mid = m.get("id", "?")
                 from_id = m.get("from_agent", "")
                 from_name = name_map.get(from_id, from_id[:8]) if from_id else "?"
                 ts = time.strftime("%H:%M:%S")
-                ch = m.get("channel_id") or m.get("channel_name")
-                content = (m.get("content") or "").replace("\n", " ")[:120]
-                parts = [f"[MSG] ts={ts} id={mid} from={from_name}"]
-                if ch:
-                    parts.append(f"channel={ch}")
-                line = " ".join(parts) + f": {content}"
-                sys.stdout.write(line + "\n")
-                sys.stdout.flush()
+                ch = m.get("channel_id") or m.get("channel_name") or None
+                raw = m.get("content") or ""
+                first_line = raw.split("\n")[0]
+                content = first_line[:100] + ("…" if len(first_line) > 100 else "")
+                _emit({"type": "msg", "ts": ts, "id": mid, "from": from_name,
+                        "channel": ch, "content": content})
                 _dbg(f"emitted msg id={mid}")
 
             # State file: last_seen_id for dedup across restarts
@@ -473,8 +475,8 @@ class Client:
                     _dbg(f"state save failed: {e}")
 
             # ── Startup ─────────────────────────────────────────────────────
-            sys.stdout.write(f"[WATCH] Started for {self.user}, interval={interval}s\n")
-            sys.stdout.flush()
+            _emit({"type": "status", "status": "started", "agent": self.user,
+                    "interval": interval})
 
             unread = self._poll_req(
                 f"/api/agents/{aid}/inbox?unread=true&limit=200", timeout=30)
@@ -490,15 +492,13 @@ class Client:
                 _dbg(f"startup: {len(unread)} inbox, {len(foreign)} foreign, {len(new_msgs)} new")
 
                 if len(new_msgs) > max_unread:
-                    sys.stderr.write(
-                        f"Error: too many unread messages ({len(new_msgs)}). "
-                        f"Clear your inbox first: ac read-all or ac inbox\n")
-                    sys.stderr.flush()
+                    _emit({"type": "error", "error": "too_many_unread",
+                            "count": len(new_msgs), "max": max_unread},
+                           stream=sys.stderr)
                     os._exit(1)
                 elif len(new_msgs) > 10:
-                    sys.stdout.write(
-                        f"[WATCH] {len(new_msgs)} unread messages (showing all)\n")
-                    sys.stdout.flush()
+                    _emit({"type": "status", "status": "batch",
+                            "count": len(new_msgs)})
                     displayed = new_msgs
                     for m in displayed:
                         _print_msg(m)
@@ -515,8 +515,7 @@ class Client:
             else:
                 _dbg("startup: inbox empty or fetch failed")
 
-            sys.stdout.write("[WATCH] Listening...\n")
-            sys.stdout.flush()
+            _emit({"type": "status", "status": "listening"})
 
             # ── Main Loop ───────────────────────────────────────────────────
             consecutive_failures = 0

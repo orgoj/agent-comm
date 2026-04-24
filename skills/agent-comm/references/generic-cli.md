@@ -26,7 +26,13 @@ Sends message and waits for reply. Checks target is online first.
 ac watch --interval 60
 ```
 
-Runs forever, outputs one-line `[MSG]` summary per message. Never marks messages as read.
+Runs forever, outputs JSON Lines (one JSON object per line). Never marks messages as read.
+
+**Output schema:**
+
+- Message: `{"type":"msg","ts":"15:33:16","id":137,"from":"agent-1","channel":null,"content":"Build complete"}`
+- Status: `{"type":"status","status":"listening"}`
+- Error (stderr): `{"type":"error","error":"too_many_unread","count":55,"max":50}`
 
 ## Multi-Agent Quick Reference
 

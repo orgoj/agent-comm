@@ -243,7 +243,8 @@ From gateway logs (April 19–20, 2026):
 
 When the pipeline is working (fresh gateway session, properly spawned watch):
 
-- `[MSG]` pattern matches correctly (plain substring, brackets are fine)
+- Pattern matches correctly (plain substring, brackets are fine)
+  - **Note:** These logs show the old `[MSG]` format. Current agent-comm uses JSON Lines, so watch patterns should match `"type":"msg"`
 - Routing metadata is set from gateway session env vars
 - Notifications are injected as `[SYSTEM:]` messages
 - Zero "Dropping watch" warnings in logs
@@ -285,19 +286,35 @@ The checkpoint should be updated to include `watch_patterns` and routing metadat
 
 The `_run_process_watcher` asyncio task should also drain `completion_queue` for watch_pattern events, not just wait for process completion. See Bug #2 fix in section 3.
 
-### 6.4 Agent-comm-side Improvement: JSON Lines Output
+### 6.4 Agent-comm JSON Lines Output (Implemented)
 
-Change `ac watch` output from ad-hoc `[MSG] ts=... id=N from=X: content` to structured JSON lines:
+`ac watch` now outputs structured JSON Lines instead of ad-hoc `[MSG] ts=...` format:
+
+**Message:**
 
 ```json
 {
   "type": "msg",
-  "ts": "08:28:30",
-  "id": 82,
-  "from": "other-agent",
+  "ts": "15:33:16",
+  "id": 137,
+  "from": "human",
   "channel": null,
-  "content": "Build complete"
+  "content": "Build complete..."
 }
+```
+
+**Status events:**
+
+```json
+{"type":"status","status":"started","agent":"my-agent","interval":60}
+{"type":"status","status":"listening"}
+{"type":"status","status":"batch","count":15}
+```
+
+**Error (stderr):**
+
+```json
+{ "type": "error", "error": "too_many_unread", "count": 55, "max": 50 }
 ```
 
 Benefits:
@@ -305,7 +322,9 @@ Benefits:
 - Easier for agents to parse (structured fields vs string parsing)
 - No ambiguity about field boundaries (sender name containing `:` etc.)
 - Extensible (add new fields without breaking parsers)
-- Works identically with hermes watch_patterns (substring `"type":"msg"` or `"type"` matches)
+- Works with hermes watch_patterns (substring `"type":"msg"` or `"type"` matches)
+
+**Watch patterns** should now match `"type":"msg"` instead of `[MSG]`. Content is truncated to first line, max 100 chars with `…` suffix on overflow.
 
 ### 6.3 Workaround for Current Limitations
 

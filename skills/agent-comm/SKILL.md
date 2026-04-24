@@ -151,12 +151,45 @@ $AC webhook delete
 
 Agent runs **either** poll **or** watch, never both. They share the same flock.
 
-| Feature     | `poll`                                    | `watch`                                      |
-| ----------- | ----------------------------------------- | -------------------------------------------- |
-| Lifetime    | One-shot — exits after message or timeout | Continuous — loops forever                   |
-| Output      | Full JSON array of messages               | One-line summary per message (`[MSG]` lines) |
-| Read status | Auto-marks returned messages as read      | NEVER marks as read — notification only      |
-| Use case    | Request-response, ad-hoc checks           | Background listener, always-on               |
+| Feature     | `poll`                                    | `watch`                                              |
+| ----------- | ----------------------------------------- | ---------------------------------------------------- |
+| Lifetime    | One-shot — exits after message or timeout | Continuous — loops forever                           |
+| Output      | Full JSON array of messages               | JSON Lines (one JSON object per line)                |
+| Read status | Auto-marks returned messages as read      | NEVER marks as read — notification only              |
+| Use case    | Request-response, ad-hoc checks           | Background listener, always-on, easy machine parsing |
+
+#### Watch JSONL Schema
+
+`ac watch` outputs **JSON Lines** (one JSON object per line):
+
+**Message:**
+
+```json
+{
+  "type": "msg",
+  "ts": "15:33:16",
+  "id": 137,
+  "from": "human",
+  "channel": null,
+  "content": "Build complete..."
+}
+```
+
+**Status events:**
+
+```json
+{"type":"status","status":"started","agent":"my-agent","interval":60}
+{"type":"status","status":"listening"}
+{"type":"status","status":"batch","count":15}
+```
+
+**Error (to stderr):**
+
+```json
+{ "type": "error", "error": "too_many_unread", "count": 55, "max": 50 }
+```
+
+Content is truncated to first line, max 100 chars with `…` suffix on overflow.
 
 ### Poll Lock (fcntl.flock)
 
