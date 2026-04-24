@@ -166,9 +166,14 @@ These are multi-agent coordination features (file locking, git commit protection
 
 ---
 
-## `ac-hxa` Script Design
+## `ac-hxa` CLI Design
 
-Python script (~500-700 lines), same pattern as current `ac`:
+TypeScript + `@coco-xyz/hxa-connect-sdk` (MIT, single dep: `ws`).
+Compiled with `bun build --compile` to a single native binary — no runtime needed, cross-platform (Linux, macOS, Windows).
+
+The SDK provides a fully typed client (`HxaConnectClient`) with all API methods built-in: `send()`, `inbox()`, `catchup()`, `catchupCount()`, `listPeers()`, `createThread()`, `sendThreadMessage()`, `addArtifact()`, plus `ThreadContext` for buffered @mention delivery with `toPromptContext()` for LLM integration.
+
+### Commands
 
 ```
 ac-hxa register --org ORG_ID --ticket TICKET --name my-agent
@@ -183,7 +188,9 @@ ac-hxa thread-msg <thread-id> <content>
 ac-hxa artifact <thread-id> <key> <content> [--type markdown]
 ```
 
-Config stored in `~/.agent-comm/config.sh` (same as now):
+### Config
+
+Stored in `~/.agent-comm/config.sh` (same location as current `ac`):
 
 ```bash
 export AC_HXA_TOKEN="bot_xxx"
@@ -191,31 +198,43 @@ export AC_HXA_URL="http://agent-comm-host:4800"
 export AC_HXA_ORG="org-id"
 ```
 
+### State
+
 Watch/poll state in `~/.agent-comm/state/<agent>.watch.state` (last_seen_ts).
+
+### Why TypeScript + Bun instead of Python
+
+1. **Official SDK** — don't reimplement HTTP calls. SDK handles auth, types, reconnection.
+2. **Single binary** — `bun build --compile` produces a standalone executable. No Python, no Node, no runtime.
+3. **Cross-platform** — same binary works on Linux, macOS, Windows (Bun cross-compiles).
+4. **MIT SDK** — no license concerns, can modify freely.
+5. **Smaller code** — SDK does the heavy lifting. Estimated ~300-400 lines vs 700 in Python.
 
 ---
 
 ## Migration Plan
 
 1. **Deploy HXA Connect** — Docker on LAN server, create org, register bots
-2. **Write `ac-hxa` script** — Python, watch/poll/ask against HXA catchup API
-3. **Update Hermes integration** — point `ac poll` loop at `ac-hxa poll`
-4. **Update Claude Code integration** — point watch background process at `ac-hxa watch`
-5. **Validate** — same notification flow, same JSON Lines output
-6. **Decommission agent-comm** — stop server, archive repo
+2. **Write `ac-hxa` CLI** — TypeScript + `@coco-xyz/hxa-connect-sdk`, watch/poll/ask against HXA catchup API
+3. **Build binaries** — `bun build --compile` for Linux, macOS, Windows
+4. **Update Hermes integration** — point poll loop at `ac-hxa poll`
+5. **Update Claude Code integration** — point watch background process at `ac-hxa watch`
+6. **Validate** — same notification flow, same JSON Lines output
+7. **Decommission agent-comm** — stop server, archive repo
 
 ---
 
 ## What Gets Dropped (and why it's OK)
 
-| Dropped feature            | Reason                                                                                   |
-| -------------------------- | ---------------------------------------------------------------------------------------- |
-| MCP transport              | Agents use CLI, not MCP. No benefit over shell subprocess.                               |
-| File-coord hook            | Multi-agent file locking not needed for current use case. Can be ported later if needed. |
-| Bash guard hook            | Same — not needed now, portable later.                                                   |
-| LAN-compatible webhooks    | Not needed — `ac-hxa watch` replaces the notification use case entirely.                 |
-| FTS5 full-text search      | HXA has thread search. Per-message FTS not critical.                                     |
-| Lightweight stack (3 deps) | HXA has more deps but runs in Docker — not a concern.                                    |
+| Dropped feature            | Reason                                                                                                                |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| MCP transport              | Agents use CLI, not MCP. CLI subprocess is simpler and more portable.                                                 |
+| File-coord hook            | Multi-agent file locking not needed for current use case. Can be ported later if needed.                              |
+| Bash guard hook            | Same — not needed now, portable later.                                                                                |
+| Server-side blocking poll  | Fragile design — server restart or network outage kills all blocking connections. Client-side polling is more robust. |
+| LAN-compatible webhooks    | Not needed — `ac-hxa watch` replaces the notification use case entirely.                                              |
+| FTS5 full-text search      | HXA has thread search. Per-message FTS not critical.                                                                  |
+| Lightweight stack (3 deps) | HXA runs in Docker, deps don't matter. `ac-hxa` uses SDK + Bun = single binary.                                       |
 
 ---
 
