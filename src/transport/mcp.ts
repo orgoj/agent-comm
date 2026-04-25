@@ -130,6 +130,10 @@ export const tools: ToolDefinition[] = [
           type: 'number',
           description: 'Reply to this thread (for direct/channel sends)',
         },
+        correlation_id: {
+          type: 'string',
+          description: 'Optional request/reply correlation UUID to preserve across replies',
+        },
         importance: IMPORTANCE_SCHEMA,
         ack_required: {
           type: 'boolean',

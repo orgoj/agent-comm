@@ -7,6 +7,7 @@ allow npm run check
 allow npm run format
 allow npm run lint
 allow npm run typecheck
+allow npm run test *
 allow npm test
 allow python3 tests/*.py *
 

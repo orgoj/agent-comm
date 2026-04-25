@@ -83,11 +83,12 @@ $AC heartbeat --status "building auth module"
 $AC send target-agent 'Message with "quotes" works!'
 $AC send channel:general 'Channel message'
 $AC send target-agent 'Reply' --thread 42
+$AC send target-agent 'Correlated reply' --correlation-id UUID
 $AC broadcast 'All agents: meeting time'
 $AC inbox [--unread]
 $AC poll --timeout 60          # Block until new message, auto-marks as read
-$AC watch --timeout 300        # Continuous listener, one-line per message, never exits
-$AC ask target-agent 'What is X?' [--timeout 120]  # Send + wait for reply
+$AC watch --interval 60        # Continuous listener, one-line per message, never exits
+$AC ask target-agent 'What is X?' [--timeout 120] [--require-online]  # Send + wait for correlated reply
 $AC mark-read 42
 $AC read-all
 $AC msg-edit 42 'Updated content'
@@ -140,8 +141,9 @@ $AC webhook delete
 
 ## Key Behaviors
 
-- **Auto-heartbeat**: Read commands (agents, inbox, discover) auto-send heartbeat.
+- **Auto-heartbeat**: Agent API requests auto-send heartbeat before the request when `COMM_USER` is set.
 - **Auto-mark read**: `poll`, `inbox`, `thread` mark returned messages as read. `watch` NEVER marks read.
+- **Ask reply matching**: `ask` generates a correlation UUID and waits for a direct reply from the target with that same `correlation_id`.
 - **Poll timeout**: Backend caps at 60s. CLI loops internally, so `--timeout 3600` works. Returns stderr + exit 1 on timeout.
 - **JSON-safe**: Quotes, backslashes, newlines safe.
 - **Identity**: `COMM_USER` env var. Config file never holds agent names.
@@ -180,13 +182,12 @@ Agent runs **either** poll **or** watch, never both. They share the same flock.
 ```json
 {"type":"status","status":"started","agent":"my-agent","interval":60}
 {"type":"status","status":"listening"}
-{"type":"status","status":"batch","count":15}
 ```
 
 **Error (to stderr):**
 
 ```json
-{ "type": "error", "error": "too_many_unread", "count": 55, "max": 50 }
+{ "type": "error", "error": "too_many_unread", "count": 6, "max": 5 }
 ```
 
 Content is truncated to first line, max 100 chars with `…` suffix on overflow.

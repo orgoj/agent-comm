@@ -141,15 +141,15 @@ Registers the MCP server in `~/.claude.json`, installs the [hook scripts](docs/S
 
 ## MCP tools (7)
 
-| Tool            | Description                                                                                                |
-| --------------- | ---------------------------------------------------------------------------------------------------------- |
-| `comm_register` | Register with name, capabilities, metadata, skills, and auto-join channels                                 |
-| `comm_agents`   | Agent management — actions: `list`, `discover`, `whoami`, `heartbeat`, `status`, `unregister`              |
-| `comm_send`     | Send messages — direct (`to`), channel, broadcast, reply (`reply_to`), forward (`forward`)                 |
-| `comm_inbox`    | Read inbox (direct + channel messages, unread filter, `importance` filter, thread view via `thread_id`)    |
-| `comm_poll`     | Block until a new inbox message arrives (supports `timeout_ms` and `importance` filter)                    |
-| `comm_channel`  | Channel management — actions: `create`, `list`, `join`, `leave`, `archive`, `update`, `members`, `history` |
-| `comm_state`    | Shared key-value state — actions: `set`, `get`, `list`, `delete`, `cas`                                    |
+| Tool            | Description                                                                                                           |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `comm_register` | Register with name, capabilities, metadata, skills, and auto-join channels                                            |
+| `comm_agents`   | Agent management — actions: `list`, `discover`, `whoami`, `heartbeat`, `status`, `unregister`                         |
+| `comm_send`     | Send messages — direct (`to`), channel, broadcast, reply (`reply_to`), forward (`forward`), optional `correlation_id` |
+| `comm_inbox`    | Read inbox (direct + channel messages, unread filter, `importance` filter, thread view via `thread_id`)               |
+| `comm_poll`     | Block until a new inbox message arrives (supports `timeout_ms` and `importance` filter)                               |
+| `comm_channel`  | Channel management — actions: `create`, `list`, `join`, `leave`, `archive`, `update`, `members`, `history`            |
+| `comm_state`    | Shared key-value state — actions: `set`, `get`, `list`, `delete`, `cas`                                               |
 
 ## REST API
 
@@ -173,7 +173,7 @@ GET  /api/feed                              Activity feed events (?agent=&type=&
 GET  /api/overview                        Full snapshot (agents, channels, messages, state)
 GET  /api/export                          Full database export as JSON
 
-POST   /api/messages                      Send a message (body: {from, to?, channel?, content})
+POST   /api/messages                      Send a message (body: {from, to?, channel?, content, thread_id?, correlation_id?, importance?})
 POST   /api/state/:namespace/:key         Set state (body: {value, updated_by})
 POST   /api/state/:namespace/:key/cas     Atomic compare-and-swap (file-coord hook uses this)
 DELETE /api/messages                       Purge all messages

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.15] - 2026-04-25
+
+### Added
+
+- **Message correlation IDs**: messages now support optional `correlation_id` end-to-end across SQLite schema migration v8, domain types, REST, MCP, and the Python `ac` CLI. MCP replies preserve the original correlation ID so request/reply flows can be matched exactly.
+- **CLI `send --correlation-id`**: agents can explicitly preserve a request/reply correlation UUID when replying outside the MCP `reply_to` flow.
+- **CLI `ask --require-online`**: strict presence checking is now opt-in. By default, `ask` only verifies that the target exists because agent presence can be unreliable when agents do not maintain heartbeats.
+
+### Changed
+
+- **`ac ask` reply matching** now uses correlation UUID + sender UUID instead of sender/timing heuristics. This prevents unrelated messages from the same agent being mistaken for the requested reply.
+- **`ac watch` unread delivery** now uses server-side unread state as the durable source of truth. The CLI no longer writes or reads `~/.agent-comm/state/<agent>.watch.state`; dedupe is process-local only, so restart cannot hide still-unread messages.
+- **`ac watch --max-unread` default** changed from `50` to `5` to force agents to explicitly handle backlogs with normal read commands before relying on watch notifications.
+- **CLI heartbeat behavior** moved into the HTTP request layer. Agent API requests send a best-effort heartbeat before the request when `COMM_USER` is set, excluding registration and heartbeat endpoints to avoid recursion.
+- **Docs and PRD** updated for migration v8, `correlation_id`, watch semantics, ask semantics, and POSIX-only flock portability.
+
+### Fixed
+
+- **Watch restart safety**: restarting `ac watch` can no longer suppress unread messages that were previously notified but never marked read.
+- **Ask false positives**: `ac ask` no longer treats an unrelated later message from the same agent as the answer.
+
 ## [1.3.11] - 2026-04-15
 
 ### Fixed

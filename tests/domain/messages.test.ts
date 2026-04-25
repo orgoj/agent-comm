@@ -39,6 +39,28 @@ describe('MessageService', () => {
       expect(msg.ack_required).toBe(true);
     });
 
+    it('preserves optional correlation_id', () => {
+      const msg = ctx.messages.send(alice.id, {
+        to: bob.id,
+        content: 'question',
+        correlation_id: '550e8400-e29b-41d4-a716-446655440000',
+      });
+      expect(msg.correlation_id).toBe('550e8400-e29b-41d4-a716-446655440000');
+      expect(ctx.messages.getById(msg.id)?.correlation_id).toBe(
+        '550e8400-e29b-41d4-a716-446655440000',
+      );
+    });
+
+    it('rejects invalid correlation_id', () => {
+      expect(() =>
+        ctx.messages.send(alice.id, {
+          to: bob.id,
+          content: 'question',
+          correlation_id: '',
+        }),
+      ).toThrow('Correlation ID');
+    });
+
     it('rejects empty content', () => {
       expect(() => ctx.messages.send(alice.id, { to: bob.id, content: '' })).toThrow(
         'non-empty string',

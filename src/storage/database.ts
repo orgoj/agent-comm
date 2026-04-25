@@ -80,6 +80,7 @@ const migrations: Migration[] = [
           from_agent TEXT NOT NULL,
           to_agent TEXT,
           thread_id INTEGER REFERENCES messages(id),
+          correlation_id TEXT,
           content TEXT NOT NULL,
           importance TEXT NOT NULL DEFAULT 'normal',
           ack_required INTEGER NOT NULL DEFAULT 0,
@@ -90,6 +91,7 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_messages_to ON messages(to_agent, created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_from ON messages(from_agent, created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_correlation ON messages(correlation_id);
 
         CREATE TABLE IF NOT EXISTS message_reads (
           message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -224,6 +226,16 @@ const migrations: Migration[] = [
           PRIMARY KEY (agent_id)
         );
       `);
+    },
+  },
+  {
+    version: 8,
+    up: (db: Database.Database) => {
+      const cols = db.prepare(`PRAGMA table_info(messages)`).all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'correlation_id')) {
+        db.exec(`ALTER TABLE messages ADD COLUMN correlation_id TEXT`);
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_correlation ON messages(correlation_id)`);
     },
   },
 ];

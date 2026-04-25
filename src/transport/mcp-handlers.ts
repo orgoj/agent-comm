@@ -213,6 +213,7 @@ export const toolHandlers: Record<string, ToolHandlerFn> = {
     const to = optString(args, 'to');
     const replyTo = optNumber(args, 'reply_to');
     const forwardId = optNumber(args, 'forward');
+    const correlationId = optString(args, 'correlation_id');
     const content = requireString(args, 'content');
 
     // --- Forward mode ---
@@ -252,6 +253,7 @@ export const toolHandlers: Record<string, ToolHandlerFn> = {
         ...replyTarget,
         content,
         thread_id: originalMsg.thread_id ?? originalMsg.id,
+        correlation_id: correlationId ?? originalMsg.correlation_id ?? undefined,
       });
       ctx.agents.touchActivity(self.id);
       return result;
@@ -277,6 +279,7 @@ export const toolHandlers: Record<string, ToolHandlerFn> = {
         channel: channelId,
         content,
         thread_id: optNumber(args, 'thread_id'),
+        correlation_id: correlationId,
         importance: optImportance(args, 'importance'),
       });
       ctx.agents.touchActivity(self.id);
@@ -291,6 +294,7 @@ export const toolHandlers: Record<string, ToolHandlerFn> = {
         to: target.id,
         content,
         thread_id: optNumber(args, 'thread_id'),
+        correlation_id: correlationId,
         importance: optImportance(args, 'importance'),
         ack_required: optBoolean(args, 'ack_required'),
       });

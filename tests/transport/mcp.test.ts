@@ -341,14 +341,21 @@ describe('MCP Tool Handler', () => {
       h1('comm_register', { name: 'replier' });
       h2('comm_register', { name: 'reply-target' });
 
-      const original = h1('comm_send', { to: 'reply-target', content: 'question?' }) as {
+      const original = h1('comm_send', {
+        to: 'reply-target',
+        content: 'question?',
+        correlation_id: '550e8400-e29b-41d4-a716-446655440000',
+      }) as {
         id: number;
+        correlation_id: string;
       };
       const reply = h2('comm_send', { reply_to: original.id, content: 'answer!' }) as {
         id: number;
         thread_id: number;
+        correlation_id: string;
       };
       expect(reply.thread_id).toBe(original.id);
+      expect(reply.correlation_id).toBe(original.correlation_id);
 
       // React to the reply
     });

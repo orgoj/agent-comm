@@ -179,7 +179,7 @@ The SDK provides a fully typed client (`HxaConnectClient`) with all API methods 
 ac-hxa register --org ORG_ID --ticket TICKET --name my-agent
 ac-hxa send <to> <content>
 ac-hxa inbox [--since TS]
-ac-hxa watch [--interval 5] [--max-unread 50]
+ac-hxa watch [--interval 5] [--max-unread 5]
 ac-hxa poll [--timeout 600]
 ac-hxa ask <to> <content> [--timeout 120]
 ac-hxa threads [--status active]
@@ -200,7 +200,7 @@ export AC_HXA_ORG="org-id"
 
 ### State
 
-Watch/poll state in `~/.agent-comm/state/<agent>.watch.state` (last_seen_ts).
+Watch dedupe state is process-local; durable read/unread state stays server-side.
 
 ### Why TypeScript + Bun instead of Python
 

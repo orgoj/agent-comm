@@ -625,8 +625,8 @@ DELETE /api/agents/offline                Purge offline agents
 ```
 GET  /api/messages                        List messages (?limit=50&from=&to=&offset=)
 GET  /api/messages/:id/thread             Get thread for a message
-POST /api/messages                        Send a message (body: {from, to?, channel?, content, thread_id?, importance?})
-POST /api/agents/:id/messages             Send as a specific agent (body: {to?, channel?, content})
+POST /api/messages                        Send a message (body: {from, to?, channel?, content, thread_id?, correlation_id?, importance?})
+POST /api/agents/:id/messages             Send as a specific agent (body: {to?, channel?, content, thread_id?, correlation_id?, importance?})
 DELETE /api/messages                      Purge all messages
 DELETE /api/messages/:id                  Delete a message (body: {agent_id})
 ```

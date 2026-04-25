@@ -546,9 +546,18 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
     const to = body.to as string | undefined;
     const channel = body.channel as string | undefined;
     const content = body.content as string | undefined;
+    const correlationId = body.correlation_id;
 
     if (!content || typeof content !== 'string') {
       json(res, { error: '"content" is required' }, 400);
+      return;
+    }
+    if (
+      correlationId !== undefined &&
+      correlationId !== null &&
+      typeof correlationId !== 'string'
+    ) {
+      json(res, { error: '"correlation_id" must be a string' }, 400);
       return;
     }
 
@@ -588,6 +597,7 @@ export function createRouter(ctx: AppContext): (req: IncomingMessage, res: Serve
       channel: channelId,
       content,
       thread_id: threadId as number | undefined,
+      correlation_id: typeof correlationId === 'string' ? correlationId : undefined,
       importance: importance as 'low' | 'normal' | 'high' | 'urgent' | undefined,
     });
     json(res, msg, 201);

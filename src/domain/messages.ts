@@ -20,6 +20,7 @@ interface MessageRow {
   to_agent: string | null;
   thread_id: number | null;
   branch_id: number | null;
+  correlation_id: string | null;
   content: string;
   importance: string;
   ack_required: number;
@@ -96,6 +97,18 @@ export class MessageService {
     if (input.importance && !VALID_IMPORTANCE.has(input.importance)) {
       throw new ValidationError(`Invalid importance: ${input.importance}`);
     }
+    if (input.correlation_id !== undefined) {
+      if (typeof input.correlation_id !== 'string' || input.correlation_id.trim() === '') {
+        throw new ValidationError('Correlation ID must be a non-empty string.');
+      }
+      if (input.correlation_id.length > 128) {
+        throw new ValidationError('Correlation ID exceeds maximum length of 128 characters.');
+      }
+      // eslint-disable-next-line no-control-regex
+      if (/[\x00-\x1f\x7f]/.test(input.correlation_id)) {
+        throw new ValidationError('Correlation ID must not contain control characters.');
+      }
+    }
     if (!input.to && !input.channel) {
       throw new ValidationError('Either "to" (agent) or "channel" must be specified.');
     }
@@ -111,14 +124,15 @@ export class MessageService {
     }
 
     const result = this.db.run(
-      `INSERT INTO messages (channel_id, from_agent, to_agent, thread_id, branch_id, content, importance, ack_required)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO messages (channel_id, from_agent, to_agent, thread_id, branch_id, correlation_id, content, importance, ack_required)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.channel ?? null,
         fromAgentId,
         input.to ?? null,
         input.thread_id ?? null,
         input.branch_id ?? null,
+        input.correlation_id ?? null,
         input.content,
         input.importance ?? 'normal',
         input.ack_required ? 1 : 0,

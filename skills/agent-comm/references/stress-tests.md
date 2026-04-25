@@ -13,6 +13,6 @@
 | Watch pattern on single poll (Hermes-5)                | PASS   | Immediate notification on message arrival       |
 | Watch pattern on single poll (Hermes-nano)             | PASS   | sqrt(144)=12, watch + notify_on_complete        |
 | Watch: continuous JSONL output (Hermes-5)              | PASS   | JSON Lines, watch_patterns=['"type":"msg"']     |
-| Watch: never marks read, last_seen_id dedup            | PASS   | Startup dump + incremental tracking             |
+| Watch: never marks read, process-local dedup           | PASS   | Startup dump + incremental tracking             |
 | Lock: os.\_exit(1) prevents race on kill               | PASS   | No in-flight request leakage after signal       |
 | 600s poll timeout cap                                  | PASS   | Full 120s poll without cutoff (Hermes-nano)     |

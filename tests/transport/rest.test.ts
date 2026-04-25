@@ -241,6 +241,17 @@ describe('REST API error cases', () => {
       expect(body.error).toContain('thread_id');
     });
 
+    it('returns 400 when correlation_id is not a string', async () => {
+      const sender = ctx.agents.register({ name: 'rest-correlation-bad-sender' });
+      const { status, body } = await post('/api/messages', {
+        from: sender.name,
+        content: 'hello',
+        correlation_id: 123,
+      });
+      expect(status).toBe(400);
+      expect(body.error).toContain('correlation_id');
+    });
+
     it('returns 400 when importance is invalid', async () => {
       const { status, body } = await post('/api/messages', {
         from: 'rest-sender',
@@ -249,6 +260,19 @@ describe('REST API error cases', () => {
       });
       expect(status).toBe(400);
       expect(body.error).toContain('importance');
+    });
+
+    it('preserves correlation_id on successful send', async () => {
+      const sender = ctx.agents.register({ name: 'rest-correlation-sender' });
+      const target = ctx.agents.register({ name: 'rest-correlation-target' });
+      const { status, body } = await post('/api/messages', {
+        from: sender.name,
+        to: target.name,
+        content: 'hello',
+        correlation_id: '550e8400-e29b-41d4-a716-446655440000',
+      });
+      expect(status).toBe(201);
+      expect(body.correlation_id).toBe('550e8400-e29b-41d4-a716-446655440000');
     });
   });
 

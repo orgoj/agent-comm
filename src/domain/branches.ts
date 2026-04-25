@@ -96,6 +96,7 @@ export class BranchService {
       to_agent: string | null;
       thread_id: number | null;
       branch_id: number | null;
+      correlation_id: string | null;
       content: string;
       importance: string;
       ack_required: number;

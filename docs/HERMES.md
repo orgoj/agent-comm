@@ -308,13 +308,12 @@ The `_run_process_watcher` asyncio task should also drain `completion_queue` for
 ```json
 {"type":"status","status":"started","agent":"my-agent","interval":60}
 {"type":"status","status":"listening"}
-{"type":"status","status":"batch","count":15}
 ```
 
 **Error (stderr):**
 
 ```json
-{ "type": "error", "error": "too_many_unread", "count": 55, "max": 50 }
+{ "type": "error", "error": "too_many_unread", "count": 6, "max": 5 }
 ```
 
 Benefits:

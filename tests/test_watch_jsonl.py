@@ -203,12 +203,12 @@ class TestErrorJsonl(unittest.TestCase):
 
     def test_too_many_unread(self):
         line = _emit({"type": "error", "error": "too_many_unread",
-                       "count": 55, "max": 50})
+                       "count": 6, "max": 5})
         parsed = json.loads(line)
         self.assertEqual(parsed["type"], "error")
         self.assertEqual(parsed["error"], "too_many_unread")
-        self.assertEqual(parsed["count"], 55)
-        self.assertEqual(parsed["max"], 50)
+        self.assertEqual(parsed["count"], 6)
+        self.assertEqual(parsed["max"], 5)
 
 
 if __name__ == "__main__":

@@ -109,7 +109,7 @@ $AC inbox [--unread]                  # full JSON, marks read
 $AC thread <id>                       # full thread JSON
 ```
 
-`ask` is reply-matched by UUID and coexists with a running `watch` (no
+`ask` is reply-matched by correlation UUID and coexists with a running `watch` (no
 flock, inbox-check loop — see PRD.md CLI Messaging Principles).
 
 ## 4. Lifecycle
@@ -119,7 +119,7 @@ flock, inbox-check loop — see PRD.md CLI Messaging Principles).
 - **During session**: react to JSONL `msg` notifications as they arrive, send
   replies via `$AC send` / `$AC ask`.
 - **End of session**: `TaskStop <monitor_task_id>`. Watch handles SIGTERM
-  cleanly (saves `last_seen_id`, releases the lock). No unregister needed
+  cleanly (releases the lock). No unregister needed
   — the agent stays visible, server marks it offline after the heartbeat
   lapses.
 

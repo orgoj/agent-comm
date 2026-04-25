@@ -19,6 +19,7 @@ import argparse
 import signal
 import fcntl
 import time
+import uuid
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
@@ -108,6 +109,7 @@ class Client:
         self.port = os.environ.get("COMM_PORT")
         self.user = os.environ.get("COMM_USER")
         self.auto_register = False
+        self._heartbeat_in_progress = False
         self._load_config()
         self.base = f"http://{self.host}:{self.port}"
         self._id_cache: dict[str, str] = {}
@@ -142,9 +144,24 @@ class Client:
 
     # ── HTTP ─────────────────────────────────────────────────────────────────
 
+    def _should_heartbeat(self, method: str, path: str) -> bool:
+        if not self.user or self._heartbeat_in_progress:
+            return False
+        if not path.startswith("/api/"):
+            return False
+        if path.endswith("/heartbeat"):
+            return False
+        # Register must work before the agent exists, so it cannot heartbeat first.
+        if method == "POST" and path == "/api/agents":
+            return False
+        return True
+
     def _req(self, method: str, path: str, body: dict | None = None,
-             timeout: int = TIMEOUT) -> object | None:
+             timeout: int = TIMEOUT, heartbeat: bool = True,
+             quiet: bool = False) -> object | None:
         """Make an HTTP request, return parsed JSON or None. Exits on error."""
+        if heartbeat and self._should_heartbeat(method, path):
+            self._heartbeat()
         url = f"{self.base}{path}"
         data = json.dumps(body).encode() if body else None
         req = urllib.request.Request(url, data=data, method=method)
@@ -157,6 +174,8 @@ class Client:
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as e:
             raw = e.read().decode()
+            if quiet:
+                return None
             try:
                 err = json.loads(raw)
                 error = err.get("error", raw)
@@ -165,18 +184,26 @@ class Client:
             print(f"Error {e.code}: {error}", file=sys.stderr)
             sys.exit(1)
         except urllib.error.URLError as e:
+            if quiet:
+                return None
             print(f"Connection failed: {e.reason}", file=sys.stderr)
             sys.exit(1)
         except TimeoutError:
+            if quiet:
+                return None
             print("Error: request timed out", file=sys.stderr)
             sys.exit(1)
         except Exception as e:
+            if quiet:
+                return None
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
-    def _poll_req(self, path: str, timeout: int) -> object | None:
+    def _poll_req(self, path: str, timeout: int, heartbeat: bool = True) -> object | None:
         """Like _req but returns None on timeout/error instead of exiting.
         Used by poll loops that need to survive individual chunk timeouts."""
+        if heartbeat and self._should_heartbeat("GET", path):
+            self._heartbeat()
         url = f"{self.base}{path}"
         _dbg(f"GET {url} (timeout={timeout}s)")
         req = urllib.request.Request(url, method="GET")
@@ -224,17 +251,19 @@ class Client:
         return self._id_cache.get(name, name)
 
     def _heartbeat(self):
-        """Auto-heartbeat on read operations. Best-effort, never blocks."""
-        if not self.user:
+        """Best-effort implicit heartbeat before agent API requests."""
+        if not self.user or self._heartbeat_in_progress:
             return
+        self._heartbeat_in_progress = True
         try:
-            aid = self._resolve(self.user)
-            self._req("PUT", f"/api/agents/{aid}/heartbeat",
-                      {"status_text": "active"}, timeout=3)
-        except SystemExit:
-            pass
+            ident = urllib.parse.quote(self.user)
+            self._req("PUT", f"/api/agents/{ident}/heartbeat",
+                      {"status_text": "active"}, timeout=3,
+                      heartbeat=False, quiet=True)
         except Exception:
             pass
+        finally:
+            self._heartbeat_in_progress = False
 
     # ── Commands ─────────────────────────────────────────────────────────────
 
@@ -262,11 +291,9 @@ class Client:
         return self._req("PUT", f"/api/agents/{aid}/heartbeat", body)
 
     def agents(self):
-        self._heartbeat()
         return self._req("GET", "/api/agents")
 
     def discover(self, skill=None, tag=None):
-        self._heartbeat()
         params = []
         if skill:
             params.append(f"skill={urllib.parse.quote(skill)}")
@@ -276,9 +303,8 @@ class Client:
         path = f"/api/agents/discover?{qs}" if qs else "/api/agents"
         return self._req("GET", path)
 
-    def send(self, to, content, importance=None, thread_id=None):
+    def send(self, to, content, importance=None, thread_id=None, correlation_id=None):
         self._need_user()
-        self._heartbeat()
         body: dict = {"from": self.user, "content": content}
         if to.startswith("channel:"):
             body["channel"] = to[8:]
@@ -288,11 +314,12 @@ class Client:
             body["importance"] = importance
         if thread_id:
             body["thread_id"] = int(thread_id)
+        if correlation_id:
+            body["correlation_id"] = correlation_id
         return self._req("POST", "/api/messages", body)
 
     def broadcast(self, content, importance=None):
         self._need_user()
-        self._heartbeat()
         body: dict = {"from": self.user, "content": content}
         if importance:
             body["importance"] = importance
@@ -313,7 +340,6 @@ class Client:
 
     def inbox(self, unread=False):
         self._need_user()
-        self._heartbeat()
         aid = self._resolve(self.user)
         params = ["limit=50"]
         if unread:
@@ -369,7 +395,7 @@ class Client:
         finally:
             _lock_release(lock_fd)
 
-    def watch(self, interval=60, max_unread=50):
+    def watch(self, interval=60, max_unread=5):
         """Background notification listener. Periodically checks for unread messages,
         prints one line per new message. Never marks anything as read.
         Never exits (until killed). Zero CPU when sleeping.
@@ -379,36 +405,24 @@ class Client:
 
         How it works:
         - Fetches unread inbox periodically (every N seconds)
-        - Filters out self-messages and already-emitted (id <= last_seen_id)
+        - Filters out self-messages and already-emitted IDs in this process
         - Prints one-line notification per new message
-        - Saves last_seen_id to state file (survives restarts)
         - Sleeps until next cycle
 
         Startup behavior:
         - If > max_unread → refuse to start, exit 1
-        - If 11-max_unread → show all with header
-        - If 1-10 → show all silently
+        - If 1-max_unread → show all silently
         - If 0 → silent
         """
 
         self._need_user()
         aid = self._resolve(self.user)
 
-        self._heartbeat()
-
         lock_fd = _lock_acquire(self.user, force=False)
         _dbg("lock acquired")
 
-        # Signal handler: save state then exit
+        # Signal handler: release lock then exit. Watch delivery state is process-local.
         def _cleanup(*_args):
-            # Cannot call _dbg here — reentrant write risk
-            try:
-                tmp = state_file + ".tmp"
-                with open(tmp, "w") as sf:
-                    sf.write(str(last_seen_id))
-                os.rename(tmp, state_file)
-            except Exception:
-                pass
             try:
                 _lock_release(lock_fd)
             except Exception:
@@ -421,6 +435,7 @@ class Client:
             # Name resolution cache
             name_map = {}
             cycle_count = 0
+            seen_ids = set()
 
             def _refresh_name_map():
                 nonlocal name_map
@@ -452,28 +467,6 @@ class Client:
                         "channel": ch, "content": content})
                 _dbg(f"emitted msg id={mid}")
 
-            # State file: last_seen_id for dedup across restarts
-            state_dir = os.path.join(os.path.expanduser("~"), ".agent-comm", "state")
-            os.makedirs(state_dir, exist_ok=True)
-            state_file = os.path.join(state_dir, f"{self.user}.watch.state")
-            last_seen_id = 0
-            try:
-                with open(state_file, "r") as sf:
-                    last_seen_id = int(sf.read().strip())
-                    _dbg(f"loaded last_seen_id={last_seen_id}")
-            except (FileNotFoundError, ValueError):
-                _dbg("no state file, starting from 0")
-
-            def _save_state():
-                try:
-                    tmp = state_file + ".tmp"
-                    with open(tmp, "w") as sf:
-                        sf.write(str(last_seen_id))
-                    os.rename(tmp, state_file)
-                    _dbg(f"saved last_seen_id={last_seen_id}")
-                except Exception as e:
-                    _dbg(f"state save failed: {e}")
-
             # ── Startup ─────────────────────────────────────────────────────
             _emit({"type": "status", "status": "started", "agent": self.user,
                     "interval": interval})
@@ -484,34 +477,22 @@ class Client:
             if unread and isinstance(unread, list):
                 # Filter self-messages
                 foreign = [m for m in unread if m.get("from_agent") != aid]
-                # Filter already-seen
-                new_msgs = [m for m in foreign if m.get("id", 0) > last_seen_id]
                 # Sort ascending by id
-                new_msgs.sort(key=lambda m: m.get("id", 0))
+                foreign.sort(key=lambda m: m.get("id", 0))
 
-                _dbg(f"startup: {len(unread)} inbox, {len(foreign)} foreign, {len(new_msgs)} new")
+                _dbg(f"startup: {len(unread)} inbox, {len(foreign)} foreign unread")
 
-                if len(new_msgs) > max_unread:
+                if len(foreign) > max_unread:
                     _emit({"type": "error", "error": "too_many_unread",
-                            "count": len(new_msgs), "max": max_unread},
+                            "count": len(foreign), "max": max_unread},
                            stream=sys.stderr)
                     os._exit(1)
-                elif len(new_msgs) > 10:
-                    _emit({"type": "status", "status": "batch",
-                            "count": len(new_msgs)})
-                    displayed = new_msgs
-                    for m in displayed:
+                elif len(foreign) > 0:
+                    for m in foreign:
                         _print_msg(m)
-                    last_seen_id = max(m.get("id", 0) for m in displayed)
-                elif len(new_msgs) > 0:
-                    displayed = new_msgs
-                    for m in displayed:
-                        _print_msg(m)
-                    last_seen_id = max(m.get("id", 0) for m in displayed)
+                        seen_ids.add(m.get("id"))
                 else:
-                    _dbg("startup: no new unread messages")
-
-                _save_state()
+                    _dbg("startup: no unread foreign messages")
             else:
                 _dbg("startup: inbox empty or fetch failed")
 
@@ -523,8 +504,6 @@ class Client:
             while True:
                 time.sleep(interval)
                 cycle_count += 1
-
-                self._heartbeat()
 
                 if cycle_count % 10 == 0:
                     _refresh_name_map()
@@ -550,18 +529,17 @@ class Client:
                     _dbg("no unread messages")
                     continue
 
-                # Filter self + already-seen, sort ascending
+                # Filter self + already emitted by this process, sort ascending
                 new_msgs = [m for m in unread
                             if m.get("from_agent") != aid
-                            and m.get("id", 0) > last_seen_id]
+                            and m.get("id") not in seen_ids]
                 new_msgs.sort(key=lambda m: m.get("id", 0))
 
                 if new_msgs:
                     _dbg(f"{len(new_msgs)} new messages")
                     for m in new_msgs:
                         _print_msg(m)
-                        last_seen_id = m.get("id", last_seen_id)
-                    _save_state()
+                        seen_ids.add(m.get("id"))
                 else:
                     _dbg(f"{len(unread)} unread but all self/seen")
 
@@ -569,20 +547,20 @@ class Client:
             _dbg("releasing lock")
             _lock_release(lock_fd)
 
-    def ask(self, to, content, timeout=120):
+    def ask(self, to, content, timeout=120, require_online=False):
         """Send a message and wait for a reply from the target agent.
 
         Uses inbox-check loop (no flock) so it coexists with a running watch.
-        1. Check if target is online — fail immediately if not
-        2. Send message to target
-        3. Loop: fetch unread inbox, match reply by UUID, mark ONLY match read
+        1. Check target exists; optionally require online/idle presence
+        2. Send message to target with a correlation UUID
+        3. Loop: fetch unread inbox, match reply by sender UUID + correlation UUID, mark ONLY match read
         4. Return the reply
         """
         import time
 
         self._need_user()
 
-        # Check if target is online
+        # Check if target exists; presence is optional because not all agents heartbeat.
         target_id = self._resolve(to)
         if target_id == to:
             print(f"Error: agent \"{to}\" is not registered", file=sys.stderr)
@@ -596,17 +574,16 @@ class Client:
         if not target_agent:
             print(f"Error: agent \"{to}\" is not registered", file=sys.stderr)
             sys.exit(1)
-        if target_agent.get("status") not in ("online", "idle"):
+        if require_online and target_agent.get("status") not in ("online", "idle"):
             print(f"Error: agent \"{to}\" is offline (status: {target_agent.get('status')})", file=sys.stderr)
             sys.exit(1)
 
         # Send the message
-        sent = self.send(to, content)
+        correlation_id = str(uuid.uuid4())
+        sent = self.send(to, content, correlation_id=correlation_id)
         if not sent:
             return None
 
-        sent_id = sent.get("id")
-        sent_at = sent.get("created_at", "")
         aid = self._resolve(self.user)
         deadline = time.monotonic() + timeout
 
@@ -630,8 +607,7 @@ class Client:
                 for msg in inbox:
                     if (isinstance(msg, dict)
                             and msg.get("from_agent") == target_id
-                            and msg.get("id") != sent_id
-                            and msg.get("created_at", "") >= sent_at):
+                            and msg.get("correlation_id") == correlation_id):
                         self.mark_read(msg["id"])
                         return msg
 
@@ -651,11 +627,9 @@ class Client:
         return self._req("POST", f"/api/agents/{aid}/read-all")
 
     def channels(self):
-        self._heartbeat()
         return self._req("GET", "/api/channels")
 
     def channel(self, name):
-        self._heartbeat()
         return self._req("GET", f"/api/channels/{urllib.parse.quote(name)}")
 
     def join(self, name):
@@ -672,7 +646,6 @@ class Client:
 
     def create_channel(self, name, description=None):
         self._need_user()
-        self._heartbeat()
         aid = self._resolve(self.user)
         body: dict = {"name": name, "created_by": aid}
         if description:
@@ -692,18 +665,15 @@ class Client:
                          {"agent_id": aid})
 
     def read_status(self, msg_id):
-        self._heartbeat()
         return self._req("GET", f"/api/messages/{msg_id}/read-status")
 
     def thread(self, msg_id):
-        self._heartbeat()
         msgs = self._req("GET", f"/api/messages/{msg_id}/thread")
         self._mark_read_msgs(msgs)
         return msgs
 
     def state_set(self, ns, key, value, ttl=None):
         self._need_user()
-        self._heartbeat()
         aid = self._resolve(self.user)
         body: dict = {"value": value, "updated_by": aid}
         if ttl:
@@ -713,7 +683,6 @@ class Client:
                          body)
 
     def state_get(self, ns, key=None):
-        self._heartbeat()
         if key:
             return self._req("GET",
                              f"/api/state/{urllib.parse.quote(ns)}/{urllib.parse.quote(key)}")
@@ -801,6 +770,7 @@ def main():
     snd.add_argument("content", help="Message content")
     snd.add_argument("--importance", choices=["low", "normal", "high", "urgent"])
     snd.add_argument("--thread", type=int, help="Thread ID to reply to")
+    snd.add_argument("--correlation-id", help="Request/reply correlation UUID to preserve")
 
     bc = sub.add_parser("broadcast", help="Broadcast to all online agents")
     bc.add_argument("content", help="Message content")
@@ -812,8 +782,8 @@ def main():
     wa = sub.add_parser("watch", help="Background notification listener (one-line per msg, never exits)")
     wa.add_argument("--interval", type=int, default=60,
                     help="Polling interval in seconds (default 60)")
-    wa.add_argument("--max-unread", type=int, default=50,
-                    help="Max unread before refusing start (default 50)")
+    wa.add_argument("--max-unread", type=int, default=5,
+                    help="Max unread before refusing start (default 5)")
     wa.add_argument("--debug", action="store_true",
                     help="Print detailed cycle info to stderr")
 
@@ -830,6 +800,8 @@ def main():
     ask.add_argument("content", help="Message content")
     ask.add_argument("--timeout", type=int, default=120,
                      help="Max wait for reply in seconds (default 120)")
+    ask.add_argument("--require-online", action="store_true",
+                     help="Fail if the target is not currently online/idle")
 
     mr = sub.add_parser("mark-read", help="Mark message as read")
     mr.add_argument("msg_id", type=int, help="Message ID")
@@ -917,7 +889,7 @@ def main():
     elif cmd == "discover":
         output(c.discover(args.skill, args.tag))
     elif cmd == "send":
-        output(c.send(args.to, args.content, args.importance, args.thread))
+        output(c.send(args.to, args.content, args.importance, args.thread, args.correlation_id))
     elif cmd == "broadcast":
         output(c.broadcast(args.content, args.importance))
     elif cmd == "inbox":
@@ -929,7 +901,7 @@ def main():
         DEBUG = args.debug
         c.watch(args.interval, args.max_unread)
     elif cmd == "ask":
-        result = c.ask(args.to, args.content, args.timeout)
+        result = c.ask(args.to, args.content, args.timeout, args.require_online)
         if result:
             output(result)
         else:

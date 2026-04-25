@@ -60,6 +60,7 @@ export interface Message {
   readonly to_agent: string | null;
   readonly thread_id: number | null;
   readonly branch_id: number | null;
+  readonly correlation_id: string | null;
   readonly content: string;
   readonly importance: MessageImportance;
   readonly ack_required: boolean;
@@ -86,6 +87,7 @@ export interface MessageSendInput {
   channel?: string;
   thread_id?: number;
   branch_id?: number;
+  correlation_id?: string;
   content: string;
   importance?: MessageImportance;
   ack_required?: boolean;
