@@ -11,6 +11,8 @@ allow npm run test *
 allow npm test
 allow python3 tests/*.py *
 
+allow rm -rf .playwright-cli
+
 allow skills/agent-comm/scripts/ac *
 
 allow-read ~/projects/hermes-agent/**

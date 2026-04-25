@@ -19,34 +19,17 @@
     return { text: text, cls: cls };
   }
 
-  function isAgentStuck(a) {
-    if (a.status === 'offline') return false;
-    if (!a.last_activity) return false;
-    var now = Date.now();
-    var actTime = new Date(
-      a.last_activity + (a.last_activity.includes('Z') || a.last_activity.includes('+') ? '' : 'Z'),
-    ).getTime();
-    var minutes = Math.floor((now - actTime) / 60000);
-    return minutes >= 10;
-  }
-
   function buildAgentCard(a) {
     var caps = AC.parseCaps(a);
     var msgCount = (AC.state.messages || []).filter(function (m) {
       return m.from_agent === a.id || m.to_agent === a.id;
     }).length;
     var hb = heartbeatFreshness(a.last_heartbeat);
-    var stuck = isAgentStuck(a);
     return (
       '<div class="card-title"><span class="status-dot ' +
       AC.esc(a.status) +
       '"></span>' +
       AC.esc(a.name) +
-      (stuck
-        ? ' <span class="stuck-badge"><span class="material-symbols-outlined" style="font-size:14px;vertical-align:-2px">hourglass_top</span> idle ' +
-          AC.timeAgo(a.last_activity) +
-          '</span>'
-        : '') +
       '</div>' +
       (a.status_text
         ? '<div class="card-meta status-text">' + AC.esc(a.status_text) + '</div>'

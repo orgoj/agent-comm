@@ -37,7 +37,7 @@ Unified timeline of structured events across all agents. Filter by event type (c
 - Forwarded message detection with styled attribution
 - **Handoff messages** rendered with distinct orange styling and swap icon
 - **Branch indicators** on messages showing fork points and branch listings in detail view
-- **Stuck detection** — "idle" badge with time since last activity on agent cards when agents are alive but inactive
+- **Activity metadata** — agent cards show heartbeat freshness separately from last meaningful activity
 - Toast notifications for agent join/leave and new messages
 - Nav badges with live counts
 - Total message count from database (not capped by local display limit)
