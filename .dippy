@@ -6,12 +6,14 @@ allow npm run build
 allow npm run check
 allow npm run format
 allow npm run lint
-allow npm run typecheck
 allow npm run test *
+allow npm run test:e2e:ui *
+allow npm run typecheck
 allow npm test
 allow python3 tests/*.py *
 
 allow rm -rf .playwright-cli
+allow rm -rf test-results
 
 allow skills/agent-comm/scripts/ac *
 

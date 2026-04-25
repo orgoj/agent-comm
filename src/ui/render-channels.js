@@ -23,7 +23,14 @@
       msgCount +
       ' messages</div>' +
       (ch.archived_at ? '<div class="card-meta" style="color:var(--yellow)">Archived</div>' : '') +
-      '<div class="card-action">View messages &rarr;</div>'
+      '<div class="card-actions">' +
+      '<button class="compose-btn channel-compose-btn" data-channel-name="' +
+      AC.escAttr(ch.name) +
+      '" title="Send message to #' +
+      AC.escAttr(ch.name) +
+      '"><span class="material-symbols-outlined" style="font-size:16px;vertical-align:-2px">edit</span> Message</button>' +
+      '<span class="card-action">View messages &rarr;</span>' +
+      '</div>'
     );
   }
 

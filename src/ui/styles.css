@@ -2362,12 +2362,18 @@ body {
   }
 }
 
-/* Compose button on agent cards */
+/* Compose button on agent/channel cards */
 .card-actions {
   margin-top: 12px;
   display: flex;
+  align-items: center;
   gap: 8px;
 }
+
+.card-actions .card-action {
+  margin-top: 0;
+}
+
 .compose-btn {
   display: inline-flex;
   align-items: center;

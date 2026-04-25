@@ -121,6 +121,19 @@ test.describe('agent-comm dashboard', () => {
     }
   });
 
+  test('human can open compose modal for a channel', async ({ page }) => {
+    await page.goto(baseUrl + '/#channels');
+    await expect(page.locator('#view-channels')).toBeVisible();
+
+    const channelCard = page.locator('[data-channel-id]').filter({ hasText: '#general' }).first();
+    await expect(channelCard).toBeVisible();
+    await channelCard.locator('.channel-compose-btn').click();
+
+    await expect(page.locator('#compose-modal')).toBeVisible();
+    await expect(page.locator('input[name="compose-target-type"][value="channel"]')).toBeChecked();
+    await expect(page.locator('#compose-channel')).toHaveValue('general');
+  });
+
   test('REST /health responds with version info', async ({ request }) => {
     const res = await request.get(baseUrl + '/health');
     expect(res.ok()).toBe(true);

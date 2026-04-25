@@ -878,6 +878,12 @@
       if (card) AC.setMessageFilter('agent', card.getAttribute('data-agent-id'));
     });
     AC._root.getElementById('channels-list').addEventListener('click', function (e) {
+      var btn = e.target.closest('.channel-compose-btn[data-channel-name]');
+      if (btn) {
+        e.stopPropagation();
+        openCompose(null, null, btn.getAttribute('data-channel-name'));
+        return;
+      }
       var card = e.target.closest('[data-channel-id]');
       if (card) AC.setMessageFilter('channel', card.getAttribute('data-channel-id'));
     });
